@@ -205,3 +205,35 @@ def test_chat_prompt_mode_parses_tool_calls(monkeypatch):
     assert res.tool_calls and res.tool_calls[0].function.name == "run_command"
     assert "ls" in res.tool_calls[0].function.arguments
     assert "".join(out).strip().startswith("実行します")  # 生テキストを on_text に流す
+
+
+# --- 接続・モデル確認ヘルパ -------------------------------------------------
+def test_models_match_basename_and_unknown():
+    from local_llm_client import models_match
+    assert models_match("org/Foo", "/abs/path/Foo") is True
+    assert models_match("a/X", "b/Y") is False
+    assert models_match(None, "x") is True   # 不明なら誤検知しない
+
+
+def test_parse_host_port():
+    from local_llm_client import parse_host_port
+    assert parse_host_port("http://127.0.0.1:8799/v1") == ("127.0.0.1", 8799)
+    assert parse_host_port("http://host/v1") == ("host", 8799)  # 既定 8799
+
+
+def test_list_models_and_check_served(monkeypatch):
+    import io, json as _json
+    import local_llm_client.client as c
+    from local_llm_client import list_models, check_model_served
+
+    def fake_urlopen(url, timeout=5.0):
+        body = _json.dumps({"data": [{"id": "org/A"}, {"id": "org/B"}]}).encode()
+        r = io.BytesIO(body); r.status = 200
+        r.__enter__ = lambda s=r: s; r.__exit__ = lambda *a: False
+        return r
+    monkeypatch.setattr(c.urllib.request, "urlopen", fake_urlopen)
+
+    assert list_models("http://x/v1") == ["org/A", "org/B"]
+    assert check_model_served("http://x/v1", "org/A") == []          # 提供あり→警告なし
+    warns = check_model_served("http://x/v1", "org/Z")               # カタログに無い
+    assert warns and "does not offer" in warns[0]

@@ -30,6 +30,7 @@ import json
 import mimetypes
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,6 +60,75 @@ def is_ready(base_url: str = DEFAULT_BASE_URL, timeout: float = 1.0) -> bool:
             return resp.status == 200
     except (urllib.error.URLError, OSError):
         return False
+
+
+def list_models(base_url: str = DEFAULT_BASE_URL, timeout: float = 5.0) -> list[str]:
+    """ゲートウェイが公開する全モデル id を /v1/models から返す（取得失敗時は []）。
+
+    ゲートウェイはカタログとして複数モデルを並べる（先頭が必ずしもアクティブとは限らない）
+    ので、モデルの提供有無は「リストに含まれるか」で判定する（→ check_model_served）。
+    """
+    try:
+        with urllib.request.urlopen(f"{base_url}/models", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return []
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    for it in items:
+        if isinstance(it, dict):
+            mid = it.get("id")
+            if isinstance(mid, str) and mid:
+                out.append(mid)
+    return out
+
+
+def models_match(a: str | None, b: str | None) -> bool:
+    """2つのモデル名が同じものを指すかを大まかに判定する。
+
+    パス指定とリポジトリ名のゆれ（例 /abs/path/Foo と org/Foo）を吸収するため、末尾要素
+    （basename）を小文字で比較する。どちらか不明なら True（誤検知を避ける）。
+    """
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    base = lambda s: s.rstrip("/").split("/")[-1].lower()  # noqa: E731
+    return base(a) == base(b)
+
+
+def parse_host_port(base_url: str, default_port: int = 8799) -> tuple[str, int]:
+    """base_url（例 http://127.0.0.1:8799/v1）から host と port を取り出す。"""
+    parsed = urllib.parse.urlparse(base_url)
+    return parsed.hostname or "127.0.0.1", parsed.port or default_port
+
+
+def check_model_served(
+    base_url: str = DEFAULT_BASE_URL, model: str | None = None, *, timeout: float = 5.0
+) -> list[str]:
+    """接続先が設定モデルを提供しているか確認し、警告メッセージ群を返す（取り違え防止）。
+
+    - 単一モデルでロード済みが食い違う → そのサーバーのモデルが使われる旨。
+    - 多モデル（ゲートウェイ）でカタログに無い → リクエストが失敗しうる旨。
+    一覧が取れない/モデル未指定なら警告なし（空リスト）。
+    """
+    if not model:
+        return []
+    models = list_models(base_url, timeout)
+    if not models or any(models_match(m, model) for m in models):
+        return []
+    if len(models) == 1:
+        return [
+            f"the running server has loaded '{models[0]}', but '{model}' was requested. "
+            "The existing server's model will be used; stop it and restart to use the "
+            "configured model."
+        ]
+    return [
+        f"the server at {base_url} does not offer '{model}' ({len(models)} models "
+        "available). The request may fail; point base_url at a server that serves it."
+    ]
 
 
 def _is_url(ref: str) -> bool:
