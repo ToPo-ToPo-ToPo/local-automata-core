@@ -1,0 +1,30 @@
+[project]
+name = "agent-core"
+version = "0.1.0"
+description = "エージェント共有コア（L3）。ツールフレームワーク・共通ツール・MCP 連携・エージェントループ・文脈管理。LLM 接続は local-llm-client（L2）に委ね、推論サーバーは別パッケージ local-llm-server。"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "ToPo-ToPo-ToPo" }]
+keywords = ["llm", "agent", "tools", "mcp", "agent-core"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+# L2 クライアント（local-llm-client）＋ エージェント機能の依存（MCP・PDF・STT 等）。
+dependencies = [
+    "local-llm-client",
+    "mcp>=1.27",
+    "pypdf>=4.0",
+    "pymupdf>=1.24",
+    "pyyaml>=6.0",
+    "mlx-whisper>=0.4 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent_core*"]

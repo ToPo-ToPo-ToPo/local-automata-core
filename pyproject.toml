@@ -1,0 +1,14 @@
+# agent-core — エージェント共有コアの uv workspace（モノレポ）。
+# 2 パッケージ: local-llm-client（L2: ゲートウェイ接続クライアント）と
+# agent-core（L3: ツール・MCP・エージェントループ）。サーバー（ゲートウェイ）は
+# 別リポジトリ local-llm-server。
+[tool.uv.workspace]
+members = ["packages/*"]
+
+# ワークスペース内のクロス依存はローカルのメンバーを editable で解決する。
+[tool.uv.sources]
+local-llm-client = { workspace = true }
+agent-core = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
