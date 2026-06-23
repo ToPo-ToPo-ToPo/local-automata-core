@@ -26,13 +26,22 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Iterator
+from types import SimpleNamespace
+from typing import Any, Callable, Iterator
 
 from openai import OpenAI
+
+TextSink = Callable[[str], None]
+
+
+def _noop_text(_text: str) -> None:  # pragma: no cover
+    pass
 
 # ゲートウェイ（local-llm-server）の既定値。クライアントは公開ポートへ繋ぐだけ。
 DEFAULT_MODEL = "mlx-community/Qwen3.6-27B-4bit"
@@ -101,6 +110,104 @@ def thinking_extra_body(enable: bool) -> dict[str, Any]:
     }
 
 
+# --- prompt-mode tool-calling プロトコル ------------------------------------
+# ネイティブの function calling に対応しないバックエンド向けに、ツール仕様をシステム
+# プロンプトへ注入し、応答中の ```tool {...}``` ブロックを解析する方式。提示（表示整形）は
+# 含めない（クライアントは on_text に生テキストを流し、整形はフロントエンドの責務）。
+_TOOL_FENCE = re.compile(r"```(?:tool|json)?\s*\n(.*?)```", re.DOTALL)
+
+
+def build_tool_spec(tools: list[dict[str, Any]]) -> str:
+    """ツール定義から、プロンプトに注入する仕様テキストを作る（prompt-mode 用）。"""
+    lines = []
+    for tool in tools:
+        fn = tool["function"]
+        params = fn.get("parameters", {}) or {}
+        props = params.get("properties", {}) or {}
+        required = set(params.get("required", []))
+        arg_parts = [
+            f'"{name}": {prop.get("type", "any")}'
+            + ("" if name in required else " (任意)")
+            for name, prop in props.items()
+        ]
+        lines.append(
+            f"- {fn['name']}: {fn.get('description', '')}"
+            f" 引数 {{{', '.join(arg_parts)}}}"
+        )
+    return (
+        "## 使えるツール\n"
+        "ツールを使うときは、本文の最後に次の形式のコードブロックだけを出力してください"
+        "（1ブロックにつき1ツール。複数呼ぶなら複数ブロック）:\n"
+        '```tool\n{"name": "<ツール名>", "arguments": {<引数>}}\n```\n'
+        "例:\n"
+        '```tool\n{"name": "run_command", "arguments": {"command": "ls -la"}}\n```\n'
+        "重要:\n"
+        '- 厳密な JSON で書くこと。引数は必ず "arguments" オブジェクトの中に入れる。\n'
+        "- 「ツールを使います」と述べるだけで終わらせず、実際に上記ブロックを出力すること。\n"
+        "- ツールを呼ぶと、その結果が次のメッセージで「ツール実行結果:」として渡される。\n"
+        "- タスクが完了したら、ツールを使わず通常の文章で最終回答すること。\n\n"
+        "利用可能なツール:\n" + "\n".join(lines)
+    )
+
+
+def transform_messages_for_prompt(
+    messages: list[dict[str, Any]], spec: str
+) -> list[dict[str, Any]]:
+    """ネイティブ形式の履歴を prompt-mode 用に変換する（先頭 system に仕様注入、tool→user）。"""
+    out: list[dict[str, Any]] = []
+    spec_added = False
+    for message in messages:
+        role = message["role"]
+        if role == "system" and not spec_added:
+            out.append({"role": "system", "content": f"{message['content']}\n\n{spec}"})
+            spec_added = True
+        elif role == "tool":
+            out.append(
+                {"role": "user", "content": "ツール実行結果:\n" + (message.get("content") or "")}
+            )
+        elif role == "assistant":
+            out.append({"role": "assistant", "content": message.get("content") or ""})
+        else:
+            out.append(dict(message))
+    if not spec_added:
+        out.insert(0, {"role": "system", "content": spec})
+    return out
+
+
+def parse_prompt_tool_calls(content: str | None) -> list[SimpleNamespace]:
+    """応答テキストから ```tool ... ``` ブロックのツール呼び出しを取り出す。"""
+    calls: list[SimpleNamespace] = []
+    if not content:
+        return calls
+    for i, block in enumerate(_TOOL_FENCE.findall(content)):
+        try:
+            obj = json.loads(block.strip())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        name = obj.get("name") or obj.get("tool")
+        if not name:
+            continue
+        args = obj.get("arguments")
+        if args is None:
+            args = obj.get("args")
+        if not isinstance(args, dict):
+            # 寛容: arguments が無ければ name 以外のトップレベルキーを引数とみなす
+            args = {
+                k: v for k, v in obj.items() if k not in ("name", "tool", "arguments", "args")
+            }
+        calls.append(
+            SimpleNamespace(
+                id=f"call_{i}",
+                function=SimpleNamespace(
+                    name=name, arguments=json.dumps(args, ensure_ascii=False)
+                ),
+            )
+        )
+    return calls
+
+
 class LLMClient:
     """OpenAI 互換エンドポイント（ゲートウェイ）へ繋ぐクライアント。
 
@@ -118,11 +225,18 @@ class LLMClient:
         temperature: float = 0.0,
         max_tokens: int | None = None,
         timeout: Any = None,
+        tool_mode: str = "native",
+        enable_thinking: bool = False,
+        stream: bool = True,
     ) -> None:
         self.model = model
         self.base_url = base_url
         self.temperature = float(temperature)
         self.max_tokens = max_tokens
+        # ツール呼び出しの方式: native（API の function calling）/ prompt（仕様注入＋JSON解析）。
+        self.tool_mode = tool_mode
+        self.enable_thinking = enable_thinking
+        self.stream = stream
         # timeout は float / httpx.Timeout / None。None のときは openai の既定に任せる
         # （ローカルの巨大モデルは初回応答が遅いので、長め/無制限を渡せるようにする）。
         client_kwargs: dict[str, Any] = {"base_url": base_url, "api_key": api_key}
@@ -163,6 +277,164 @@ class LLMClient:
             delta = chunk.choices[0].delta.content
             if delta:
                 yield delta
+
+    # --- エージェントループ向け: tool-calling 付き 1 ターン -----------------
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        on_text: TextSink = _noop_text,
+    ) -> SimpleNamespace:
+        """1 ターン分の応答を受信し、`.content` / `.tool_calls`（/ `.parse_error`）を返す。
+
+        本文は on_text に**生テキスト断片**として流す（表示整形・スピナー等の提示は呼び出し側
+        ＝フロントエンドの責務。本クライアントは提示を持たない）。
+
+        tool_mode="prompt" のときは API の tools を使わず、ツール仕様をシステムプロンプトに
+        注入し、応答中の ```tool {...}``` を解析してツール呼び出しを取り出す。
+        """
+        tools = tools or []
+        extra: dict[str, Any] = {"extra_body": thinking_extra_body(self.enable_thinking)}
+
+        if tools and self.tool_mode == "prompt":
+            spec = build_tool_spec(tools)
+            converted = transform_messages_for_prompt(messages, spec)
+            if self.stream:
+                result = self._chat_stream(converted, [], on_text, extra)
+            else:
+                result = self._chat_once(converted, [], on_text, extra)
+            calls = parse_prompt_tool_calls(result.content)
+            parse_error = None
+            if not calls and result.content and _TOOL_FENCE.search(result.content):
+                parse_error = (
+                    "Could not parse the tool-call JSON. "
+                    'Correct format: ```tool\n{"name":"<tool_name>","arguments":{...}}\n``` '
+                    '(strict JSON; put arguments inside "arguments"). Please output it again.'
+                )
+            return SimpleNamespace(
+                content=result.content, tool_calls=calls or None, parse_error=parse_error
+            )
+        if self.stream:
+            return self._chat_stream(messages, tools, on_text, extra)
+        return self._chat_once(messages, tools, on_text, extra)
+
+    def _chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        on_text: TextSink,
+        extra: dict[str, Any],
+    ) -> SimpleNamespace:
+        """ストリーミングで応答を取得する（本文断片を on_text へ、tool_calls を蓄積）。"""
+        stream = self.openai.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools or None,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stream=True,
+            **extra,
+        )
+        content_parts: list[str] = []
+        partial_calls: dict[int, dict[str, str]] = {}
+        emitted = False
+        started = False  # 本文の先頭の空白を捨てる
+        pending_ws = ""  # 末尾の空白を保留し、後続テキストが来たときだけ出す
+
+        def feed_content(piece: str) -> None:
+            nonlocal started, pending_ws, emitted
+            if not started:
+                piece = piece.lstrip()
+                if not piece:
+                    return
+                started = True
+            combined = pending_ws + piece
+            stripped = combined.rstrip()
+            pending_ws = combined[len(stripped):]
+            if stripped:
+                content_parts.append(stripped)
+                on_text(stripped)
+                emitted = True
+
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                feed_content(delta.content)
+            for tc in delta.tool_calls or []:
+                entry = partial_calls.setdefault(
+                    tc.index, {"id": "", "name": "", "arguments": ""}
+                )
+                if tc.id:
+                    entry["id"] = tc.id
+                if tc.function and tc.function.name:
+                    entry["name"] += tc.function.name
+                if tc.function and tc.function.arguments:
+                    entry["arguments"] += tc.function.arguments
+        if emitted:
+            on_text("\n")
+
+        tool_calls = [
+            SimpleNamespace(
+                id=partial_calls[i]["id"],
+                function=SimpleNamespace(
+                    name=partial_calls[i]["name"], arguments=partial_calls[i]["arguments"]
+                ),
+            )
+            for i in sorted(partial_calls)
+        ]
+        return SimpleNamespace(
+            content="".join(content_parts) or None, tool_calls=tool_calls or None
+        )
+
+    def _chat_once(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        on_text: TextSink,
+        extra: dict[str, Any],
+    ) -> SimpleNamespace:
+        """非ストリーミングで 1 回応答を取得する。"""
+        response = self.openai.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools or None,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stream=False,
+            **extra,
+        )
+        message = response.choices[0].message
+        content = (message.content or "").strip() or None
+        if content:
+            on_text(content)
+            on_text("\n")
+        return SimpleNamespace(content=content, tool_calls=message.tool_calls or None)
+
+    def suggest_title(self, task: str, *, max_chars_hint: int = 15) -> str:
+        """タスク文から短いタイトルを生成する（失敗時は空文字。例外は投げない）。"""
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "ユーザーのタスクを表す、フォルダ名向けの簡潔なタイトルを作ってください。"
+                    f"日本語で{max_chars_hint}文字以内、記号・引用符・拡張子・前置きは付けず、"
+                    "タイトルだけを1行で出力します。"
+                ),
+            },
+            {"role": "user", "content": task},
+        ]
+        try:
+            resp = self.openai.chat.completions.create(
+                model=self.model, messages=messages, temperature=0.3, max_tokens=64,
+                stream=False, extra_body=thinking_extra_body(False),
+            )
+            content = resp.choices[0].message.content or ""
+        except Exception:  # noqa: BLE001 - 補助機能。失敗時は呼び出し側がフォールバック
+            return ""
+        lines = content.strip().splitlines()
+        return lines[0].strip() if lines else ""
 
 
 def connect(

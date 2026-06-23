@@ -164,3 +164,44 @@ def test_thinking_extra_body_emits_both_forms():
     off = thinking_extra_body(False)
     assert off["enable_thinking"] is False
     assert off["chat_template_kwargs"]["enable_thinking"] is False
+
+
+# --- chat()（tool-calling）---------------------------------------------------
+class _Delta:
+    def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _StreamChoice:
+    def __init__(self, delta):
+        self.choices = [type("C", (), {"delta": delta})()]
+
+
+def _fake_stream(pieces):
+    for p in pieces:
+        yield _StreamChoice(_Delta(content=p))
+
+
+def test_chat_prompt_mode_parses_tool_calls(monkeypatch):
+    import local_llm_client.client as c
+
+    class FakeChat:
+        def create(self, **kw):
+            # prompt-mode はストリーム。tool ブロックを含む本文を返す。
+            return _fake_stream(['実行します\n', '```tool\n{"name":"run_command",',
+                                 '"arguments":{"command":"ls"}}\n```'])
+    class FakeOpenAI:
+        def __init__(self, *a, **k): self.chat = type("X", (), {"completions": FakeChat()})()
+    monkeypatch.setattr(c, "OpenAI", FakeOpenAI)
+
+    llm = c.LLMClient(model="m", tool_mode="prompt", stream=True)
+    out = []
+    res = llm.chat(
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "ls して"}],
+        tools=[{"function": {"name": "run_command", "description": "", "parameters": {}}}],
+        on_text=out.append,
+    )
+    assert res.tool_calls and res.tool_calls[0].function.name == "run_command"
+    assert "ls" in res.tool_calls[0].function.arguments
+    assert "".join(out).strip().startswith("実行します")  # 生テキストを on_text に流す
