@@ -68,7 +68,7 @@ class Transcriber:
         except ImportError as exc:  # 親切なエラーにして呼び出し側へ返す
             raise RuntimeError(
                 "音声認識には mlx-whisper が必要です（既定の依存。Apple Silicon で "
-                "`uv sync` すると入ります）。見つからない場合は `pip install mlx-whisper`"
+                "`uv sync` すると入ります）。見つからない場合は `uv add mlx-whisper`"
                 "（mlx-whisper は Apple Silicon 専用）。"
             ) from exc
         return mlx_whisper
