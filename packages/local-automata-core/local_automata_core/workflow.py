@@ -1,12 +1,9 @@
-"""オーケストレーション型ワークフロー。
+"""オーケストレーション型ワークフローの**仕様モデルとパーサ**（再利用ツールキットの一部）。
 
-外部 YAML で「決まった手順」を定義し、各ステップを順番に・決定論的に実行する。
-助言型（system プロンプトへ手順を注入し LLM の自律判断に委ねる方式: settings の
-workflow_file = "*.md"）と異なり、こちらはステップの順序・遷移・終了をコード側が
-握るため、指示したワークフローを確実に実行させたい場合に使う。
-
-ステップの完了は complete_step 制御ツール（tools/workflow_control.py）で報告させ、
-呼ばれるまで次へ進めない。result='fail' のステップは on_fail.goto へ戻す。
+外部 YAML で「決まった手順」を定義する WorkflowSpec / WorkflowStep と、その検証付きパーサ
+parse_workflow を提供する。settings.load_agent_config が agent.toml の workflow_file を読む際に
+使う。仕様に従って Agent を駆動する WorkflowRunner（Agent 結合）は利用側（local-automata）に
+ある（core は Agent ループを持たない）。
 """
 from __future__ import annotations
 
@@ -14,10 +11,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
-
-from .agent import Agent
-from .images import build_user_content
-from .tools.workflow_control import COMPLETE_STEP_TOOL
 
 WORKFLOW_MODES = ("advisory", "orchestrated")
 
@@ -143,118 +136,3 @@ def parse_workflow(text: str, *, label: str = "workflow") -> WorkflowSpec:
         system_append=system_append,
         steps=steps,
     )
-
-
-# --- 実行 -----------------------------------------------------------------
-
-
-class WorkflowRunner:
-    """WorkflowSpec に従って Agent をステップごとに駆動する。
-
-    Agent と同じ run()/reset()/on_text/llm を備え、CLI・Web から透過的に使える。
-    complete_step が呼ばれるまで次のステップへ進まないため、手順を確実に踏ませる。
-    """
-
-    def __init__(self, agent: Agent, spec: WorkflowSpec, base_system: str) -> None:
-        self.agent = agent
-        self.spec = spec
-        self._base_system = base_system
-
-    # CLI / Web から Agent と同じインターフェイスで扱えるよう委譲する。
-    @property
-    def llm(self):  # noqa: D401 - 委譲プロパティ
-        return self.agent.llm
-
-    @property
-    def on_text(self):
-        return self.agent.on_text
-
-    @on_text.setter
-    def on_text(self, value) -> None:
-        self.agent.on_text = value
-
-    @property
-    def on_status(self):
-        return self.agent.on_status
-
-    @on_status.setter
-    def on_status(self, value) -> None:
-        self.agent.on_status = value
-
-    def reset(self) -> None:
-        self.agent.set_system(self._base_system)
-        self.agent.reset()
-
-    def _compose_system(self, step: WorkflowStep, index: int) -> str:
-        parts = [self._base_system]
-        if self.spec.system_append:
-            parts.append(self.spec.system_append)
-        n = len(self.spec.steps)
-        parts.append(
-            f"## 現在のステップ ({index + 1}/{n}): {step.title}\n"
-            f"{step.instructions}\n\n"
-            "このステップに集中し、完了したら complete_step(result=\"pass\") を必ず呼んで"
-            "ください。やり直しや前段の修正が必要なら complete_step(result=\"fail\", "
-            "note=理由) を呼んでください。"
-        )
-        return "\n\n".join(parts)
-
-    def run(
-        self,
-        user_input: str,
-        images: list[str] | None = None,
-        files: list[str] | None = None,
-    ) -> str:
-        index_of = {s.id: i for i, s in enumerate(self.spec.steps)}
-        retries: dict[str, int] = {}
-        idx = 0
-        first = True
-        final = ""
-        emit = self.agent.on_text
-        while 0 <= idx < len(self.spec.steps):
-            step = self.spec.steps[idx]
-            emit(f"\n■ Step {idx + 1}/{len(self.spec.steps)}: {step.title}\n")
-            if first:
-                user_content: Any = build_user_content(user_input, images, files)
-                first = False
-            else:
-                user_content = (
-                    f"前のステップが完了しました。次のステップ「{step.title}」に進みます。"
-                )
-            allowed: set[str] | None = None
-            if step.allowed_tools is not None:
-                allowed = set(step.allowed_tools) | {COMPLETE_STEP_TOOL}
-            final, control = self.agent.run_phase(
-                user_content,
-                system=self._compose_system(step, idx),
-                allowed_tools=allowed,
-                max_steps=step.max_steps or self.agent.config.max_steps,
-                stop_tools={COMPLETE_STEP_TOOL},
-            )
-            if control is None:
-                msg = (
-                    f"(Workflow aborted: step \"{step.title}\" reached the limit "
-                    "without calling complete_step)"
-                )
-                emit(msg + "\n")
-                return msg
-            if control.get("result") == "fail" and step.on_fail is not None:
-                n = retries.get(step.id, 0)
-                if n >= step.on_fail.max_retries:
-                    msg = (
-                        f"(Workflow aborted: step \"{step.title}\" reached the retry "
-                        f"limit ({step.on_fail.max_retries} times))"
-                    )
-                    emit(msg + "\n")
-                    return msg
-                retries[step.id] = n + 1
-                emit(
-                    f"  ↻ result=fail → going back to "
-                    f"\"{self.spec.steps[index_of[step.on_fail.goto]].title}\" "
-                    f"({n + 1}/{step.on_fail.max_retries})\n"
-                )
-                idx = index_of[step.on_fail.goto]
-                continue
-            idx += 1
-        emit("\n■ Workflow completed\n")
-        return final

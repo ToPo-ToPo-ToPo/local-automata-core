@@ -77,23 +77,6 @@ def test_result_to_text():
     assert _result_to_text(empty) == "(出力なし)"
 
 
-def test_build_agent_registers_extra_tools(tmp_path):
-    from local_automata_core import compose_agent, build_mcp
-    from local_automata_core.config import Config
-    from local_automata_core.settings import AgentConfig
-    from local_automata_core.tools import Tool
-
-    extra = Tool(
-        name="mcp_thing",
-        description="d",
-        parameters={"type": "object", "properties": {}},
-        func=lambda: "x",
-    )
-    agent = compose_agent(
-        Config(), AgentConfig(tools=[]), str(tmp_path / "ws"), False, extra_tools=[extra]
-    )
-    assert "mcp_thing" in [t.name for t in agent.tools]
-
 
 def test_stdio_server_end_to_end():
     """実際の MCP サーバー（stdio サブプロセス）に接続してツールを呼ぶ。"""
@@ -673,25 +656,6 @@ def test_parse_mcp_dir_runtime(tmp_path):
         load_agent_config(write(tmp_path, 'mcp_dir = "AIOS"\n')).runtime["mcp_dir"]
         == "AIOS"
     )
-
-
-def test_build_agent_registers_mcp_meta_tools(tmp_path):
-    """build_agent(mcp=...) でメタツールが登録される（遅延起動の配線）。"""
-    from local_automata_core import compose_agent, build_mcp
-    from local_automata_core.config import Config
-    from local_automata_core.settings import AgentConfig
-
-    m = MCPManager({"demo": {"command": "x"}})
-    m.start_lazy()
-    try:
-        agent = compose_agent(
-            Config(), AgentConfig(tools=[]), str(tmp_path / "ws"), False, mcp=m
-        )
-        names = [t.name for t in agent.tools]
-        assert "list_mcp_servers" in names
-        assert "activate_mcp_server" in names
-    finally:
-        m.close()
 
 
 def test_meta_tool_activate_unknown_returns_error():

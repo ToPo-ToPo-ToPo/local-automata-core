@@ -68,26 +68,9 @@ def default_registry(
     return build_registry(None, workdir, allow_install)
 
 
-def attach_agentic_tools(agent, workdir: str | Workspace = DEFAULT_WORKDIR) -> None:
-    """エージェントに後付けの高度ツールを登録する。
-
-    - dispatch_agent: 読み取り専用の子エージェントで大規模コードを調査（結論だけ返す）。
-    - view_image:     生成画像／過去画像を vision 入力として読み込み確認する。
-    - read_pdf_pages: PDF のページを画像にレンダリングして視覚的に読む。
-
-    いずれも親エージェント・LLM・作業ディレクトリを参照するため build_registry では
-    なくエージェント生成後に登録する。CLI/GUI（build_agent）は自動で呼ぶが、ライブラリ
-    から手で Agent を組む場合はこれを1行呼べば同じ機能が使える。workdir は build_registry
-    に渡したのと同じものを指定する（str か Workspace）。
-    """
-    from .subagent import build_dispatch_agent_tool
-    from .vision import build_read_pdf_pages_tool, build_view_image_tool
-
-    ws = workdir if isinstance(workdir, Workspace) else Workspace(workdir)
-    agent.tools.register(build_dispatch_agent_tool(agent.llm, agent.config, ws, agent))
-    agent.tools.register(build_view_image_tool(ws, agent))
-    agent.tools.register(build_read_pdf_pages_tool(ws, agent))
-
+# 注: エージェント結合ツール（dispatch_agent / view_image / read_pdf_pages）の後付け登録
+# （attach_agentic_tools）は Agent ループとともに利用側 local-automata へ移した。core は
+# フロントエンド非依存の汎用ツール（build_registry が組む filesystem / shell など）だけを提供する。
 
 __all__ = [
     "Tool",
@@ -99,7 +82,6 @@ __all__ = [
     "available_tool_names",
     "build_registry",
     "default_registry",
-    "attach_agentic_tools",
     "MemoryStore",
     "build_memory_tools",
     "MEMORY_TOOL_NAMES",

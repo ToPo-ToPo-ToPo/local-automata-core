@@ -496,7 +496,7 @@ wheels = [
 
 [[package]]
 name = "local-automata-core"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/local-automata-core" }
 dependencies = [
     { name = "local-llm-client" },

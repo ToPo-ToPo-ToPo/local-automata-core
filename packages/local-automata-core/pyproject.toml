@@ -2,7 +2,7 @@
 # 配布名・import 名を揃える: dist = local-automata-core / import = local_automata_core。
 # （汎用名 agent-core は他プロジェクトと衝突するため使用不可。）
 name = "local-automata-core"
-version = "0.2.0"
+version = "0.3.0"
 description = "エージェント共有コア（L3）。ツールフレームワーク・共通ツール・MCP 連携・エージェントループ・文脈管理。LLM 接続は local-llm-client（L2）に委ね、推論サーバーは別パッケージ local-llm-server。"
 readme = "README.md"
 requires-python = ">=3.11"
