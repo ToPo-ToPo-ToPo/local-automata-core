@@ -1,10 +1,13 @@
 [project]
-name = "agent-core"
+# PyPI 配布名は local-automata-core（汎用名 agent-core は他プロジェクトと衝突）。
+# import 名は引き続き `agent_core`（下の packages.find を参照）。
+name = "local-automata-core"
 version = "0.1.0"
 description = "エージェント共有コア（L3）。ツールフレームワーク・共通ツール・MCP 連携・エージェントループ・文脈管理。LLM 接続は local-llm-client（L2）に委ね、推論サーバーは別パッケージ local-llm-server。"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "ToPo-ToPo-ToPo" }]
 keywords = ["llm", "agent", "tools", "mcp", "agent-core"]
 classifiers = [
@@ -13,14 +16,18 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 # L2 クライアント（local-llm-client）＋ エージェント機能の依存（MCP・PDF・STT 等）。
+# 強化版 API（chat / 接続ヘルパ 等）が必要なため >=0.2.0 をピン留めする。
 dependencies = [
-    "local-llm-client",
+    "local-llm-client>=0.2.0",
     "mcp>=1.27",
     "pypdf>=4.0",
     "pymupdf>=1.24",
     "pyyaml>=6.0",
     "mlx-whisper>=0.4 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+
+[project.urls]
+Repository = "https://github.com/ToPo-ToPo-ToPo/agent-core"
 
 [build-system]
 requires = ["setuptools>=77"]
