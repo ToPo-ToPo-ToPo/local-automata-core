@@ -1,7 +1,7 @@
-# agent-core — エージェント共有コアの uv workspace（モノレポ）。
+# local-automata-core — エージェント共有コアの uv workspace（モノレポ）。
 # 2 パッケージ: local-llm-client（L2: ゲートウェイ接続クライアント）と
-# agent-core（L3: ツール・MCP・エージェントループ）。サーバー（ゲートウェイ）は
-# 別リポジトリ local-llm-server。
+# local-automata-core（L3: ツール・MCP・エージェントループ、import 名 local_automata_core）。
+# サーバー（ゲートウェイ）は別リポジトリ local-llm-server。
 [tool.uv.workspace]
 members = ["packages/*"]
 

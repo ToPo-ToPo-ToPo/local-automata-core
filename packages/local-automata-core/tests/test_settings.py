@@ -1,6 +1,6 @@
 import pytest
 
-from agent_core.settings import find_config_path, load_agent_config
+from local_automata_core.settings import find_config_path, load_agent_config
 
 
 def write(tmp_path, text):
@@ -29,7 +29,7 @@ def test_tools_and_runtime(tmp_path):
 def test_forward_tool_images_in_runtime(tmp_path):
     # forward_tool_images は runtime に入り、Config まで伝わる
     # （MCPツールが返す画像をVLMへ転送するスイッチ。vision 利用時に true）。
-    from agent_core.config import Config
+    from local_automata_core.config import Config
 
     p = write(
         tmp_path,

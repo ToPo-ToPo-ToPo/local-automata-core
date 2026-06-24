@@ -1,4 +1,4 @@
-from agent_core.config import DEFAULT_MODEL, Config
+from local_automata_core.config import DEFAULT_MODEL, Config
 
 
 def test_defaults():

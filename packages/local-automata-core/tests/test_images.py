@@ -2,14 +2,14 @@ import io
 
 import pytest
 
-from agent_core.images import (
+from local_automata_core.images import (
     build_user_content,
     parse_page_spec,
     pdf_to_image_urls,
     read_attachment_text,
     to_image_url,
 )
-from agent_core.spinner import Spinner
+from local_automata_core.spinner import Spinner
 
 
 def _make_pdf(path, pages):
@@ -72,7 +72,7 @@ def test_build_user_content_with_image(tmp_path):
 def test_build_user_content_with_video(tmp_path, monkeypatch):
     # 動画は代表フレームに展開して画像として扱う（ffmpeg はモックする）。
     monkeypatch.setattr(
-        "agent_core.images.video_to_image_urls",
+        "local_automata_core.images.video_to_image_urls",
         lambda ref, **k: ["data:image/jpeg;base64,AAAA", "data:image/jpeg;base64,BBBB"],
     )
     content = build_user_content("動画を見て", videos=["clip.mp4"])
@@ -83,11 +83,11 @@ def test_build_user_content_with_video(tmp_path, monkeypatch):
 
 
 def test_video_to_image_urls_requires_ffmpeg(tmp_path, monkeypatch):
-    monkeypatch.setattr("agent_core.images.shutil.which", lambda _name: None)
+    monkeypatch.setattr("local_automata_core.images.shutil.which", lambda _name: None)
     v = tmp_path / "v.mp4"
     v.write_bytes(b"\x00\x00")
     with pytest.raises(RuntimeError, match="ffmpeg"):
-        from agent_core.images import video_to_image_urls
+        from local_automata_core.images import video_to_image_urls
 
         video_to_image_urls(str(v))
 
@@ -148,7 +148,7 @@ def test_spinner_inert_on_non_tty():
 
 def test_spinner_global_disable():
     # GUI 用に set_enabled(False) で全スピナーを無効化できる（TTY でも描かない）。
-    from agent_core.spinner import set_enabled
+    from local_automata_core.spinner import set_enabled
 
     class _TTY(io.StringIO):
         def isatty(self):

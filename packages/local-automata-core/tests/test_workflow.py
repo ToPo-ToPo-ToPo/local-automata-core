@@ -2,12 +2,12 @@ import textwrap
 
 import pytest
 
-from agent_core import Agent
-from agent_core.config import Config
-from agent_core.settings import load_agent_config
-from agent_core.tools import build_registry
-from agent_core.tools.workflow_control import build_workflow_control_tools
-from agent_core.workflow import WorkflowRunner, parse_workflow
+from local_automata_core import Agent
+from local_automata_core.config import Config
+from local_automata_core.settings import load_agent_config
+from local_automata_core.tools import build_registry
+from local_automata_core.tools.workflow_control import build_workflow_control_tools
+from local_automata_core.workflow import WorkflowRunner, parse_workflow
 from conftest import FakeLLM, msg, tool_call
 
 YAML = textwrap.dedent(

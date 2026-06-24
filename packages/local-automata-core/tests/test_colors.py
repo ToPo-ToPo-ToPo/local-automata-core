@@ -1,6 +1,6 @@
 import io
 
-from agent_core.colors import BOLD_CYAN, RESET, colorize
+from local_automata_core.colors import BOLD_CYAN, RESET, colorize
 
 
 class _Tty(io.StringIO):

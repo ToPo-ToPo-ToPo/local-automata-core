@@ -2,9 +2,9 @@ import httpx
 import pytest
 from openai import APIConnectionError
 
-from agent_core import Agent
-from agent_core.config import Config
-from agent_core.tools import Tool, ToolRegistry, build_registry
+from local_automata_core import Agent
+from local_automata_core.config import Config
+from local_automata_core.tools import Tool, ToolRegistry, build_registry
 from conftest import FakeLLM, msg, tool_call
 
 
@@ -332,7 +332,7 @@ def _toolmsg(cid, content):
 
 def test_prune_history_elides_stale_and_deleted(tmp_path):
     import json
-    from agent_core.agent import _ELIDED_DELETED, _ELIDED_STALE
+    from local_automata_core.agent import _ELIDED_DELETED, _ELIDED_STALE
 
     reg = build_registry([], str(tmp_path / "ws"))
     agent = Agent(FakeLLM([]), reg, Config(), system_prompt="S")
@@ -396,7 +396,7 @@ def _img_count(m):
 
 
 def test_prune_old_images_keeps_recent(tmp_path):
-    from agent_core.agent import _ELIDED_IMAGE
+    from local_automata_core.agent import _ELIDED_IMAGE
 
     reg = build_registry([], str(tmp_path / "ws"))
     agent = Agent(FakeLLM([]), reg, Config(max_context_images=2), system_prompt="S")
@@ -437,8 +437,8 @@ def test_prune_old_images_disabled_and_zero(tmp_path):
 
 def test_image_on_demand_mode_registers_and_refetches(tmp_path):
     # on_demand: 古い画像に id を振りラベル付きで省略、view_image(id) で呼び戻せる。
-    from agent_core.tools.workspace import Workspace
-    from agent_core.tools.vision import build_view_image_tool
+    from local_automata_core.tools.workspace import Workspace
+    from local_automata_core.tools.vision import build_view_image_tool
 
     ws = Workspace(str(tmp_path / "ws"))
     ws.ensure()

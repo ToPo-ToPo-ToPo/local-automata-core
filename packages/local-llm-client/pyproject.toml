@@ -29,7 +29,7 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/ToPo-ToPo-ToPo/agent-core"
+Repository = "https://github.com/ToPo-ToPo-ToPo/local-automata-core"
 
 [build-system]
 requires = ["setuptools>=77"]

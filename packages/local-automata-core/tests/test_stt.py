@@ -1,6 +1,6 @@
 import pytest
 
-from agent_core.stt import DEFAULT_STT_MODEL, Transcriber
+from local_automata_core.stt import DEFAULT_STT_MODEL, Transcriber
 
 
 def test_transcriber_defaults():
@@ -25,7 +25,7 @@ def test_transcribe_requires_mlx_whisper():
 
 def test_correct_transcript():
     from types import SimpleNamespace
-    from agent_core.stt import correct_transcript
+    from local_automata_core.stt import correct_transcript
 
     class LLM:
         def chat(self, messages, tools, on_text=lambda t: None):

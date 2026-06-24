@@ -4,8 +4,8 @@
 LLM への接続（生成・tool-calling プロトコル）は L2 の local-llm-client に委ね、推論サーバー
 （ゲートウェイ）は別パッケージ local-llm-server。
 
-    from agent_core import Agent, Config, build_registry, compose_agent
-    from agent_core import load_agent_config
+    from local_automata_core import Agent, Config, build_registry, compose_agent
+    from local_automata_core import load_agent_config
 
 複数フロントエンド（CLI / Web 等）から再利用できる中立なコア。LLM 本文は on_text、
 ループの進捗は on_status で受け取り、フロントエンドが表示を差し替える。

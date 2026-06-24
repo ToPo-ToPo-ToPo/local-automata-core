@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_core.mcp_client import (
+from local_automata_core.mcp_client import (
     MCPManager,
     _result_to_text,
     _safe_name,
@@ -20,7 +20,7 @@ from agent_core.mcp_client import (
     discover_servers,
     resolve_call_timeout,
 )
-from agent_core.settings import load_agent_config
+from local_automata_core.settings import load_agent_config
 
 _SERVER = str(Path(__file__).with_name("_mcp_server.py"))
 
@@ -78,10 +78,10 @@ def test_result_to_text():
 
 
 def test_build_agent_registers_extra_tools(tmp_path):
-    from agent_core import compose_agent, build_mcp
-    from agent_core.config import Config
-    from agent_core.settings import AgentConfig
-    from agent_core.tools import Tool
+    from local_automata_core import compose_agent, build_mcp
+    from local_automata_core.config import Config
+    from local_automata_core.settings import AgentConfig
+    from local_automata_core.tools import Tool
 
     extra = Tool(
         name="mcp_thing",
@@ -343,7 +343,7 @@ def test_progress_callback_logs_message():
 
 def test_keyboard_interrupt_cancels_and_reraises(monkeypatch):
     """Ctrl-C（KeyboardInterrupt）で future.cancel() を呼んで再送出する。"""
-    import agent_core.mcp_client as mc
+    import local_automata_core.mcp_client as mc
 
     cancelled = {"v": False}
 
@@ -489,7 +489,7 @@ def test_activate_unknown_server_raises():
 def test_meta_tools_register_into_registry():
     """list/activate/deactivate メタツールが registry を動的に増減させる。"""
     pytest.importorskip("mcp")
-    from agent_core.tools.base import ToolRegistry
+    from local_automata_core.tools.base import ToolRegistry
 
     servers = {
         "demo": {
@@ -652,7 +652,7 @@ def test_lazy_tools_uses_cache_without_harvest(tmp_path):
     """キャッシュがあれば harvest（接続）せずに proxy を構築できる。"""
     cache = tmp_path / "cache.json"
     cfg = {"command": "does-not-exist", "args": []}
-    key = __import__("agent_core.mcp_client", fromlist=["_server_sig_hash"])._server_sig_hash(cfg)
+    key = __import__("local_automata_core.mcp_client", fromlist=["_server_sig_hash"])._server_sig_hash(cfg)
     cache.write_text(
         '{"%s": {"name": "ghost", "tools": [{"name": "ghost_do", "description": "d", "parameters": {"type": "object", "properties": {}}}]}}'
         % key,
@@ -677,9 +677,9 @@ def test_parse_mcp_dir_runtime(tmp_path):
 
 def test_build_agent_registers_mcp_meta_tools(tmp_path):
     """build_agent(mcp=...) でメタツールが登録される（遅延起動の配線）。"""
-    from agent_core import compose_agent, build_mcp
-    from agent_core.config import Config
-    from agent_core.settings import AgentConfig
+    from local_automata_core import compose_agent, build_mcp
+    from local_automata_core.config import Config
+    from local_automata_core.settings import AgentConfig
 
     m = MCPManager({"demo": {"command": "x"}})
     m.start_lazy()
@@ -697,7 +697,7 @@ def test_build_agent_registers_mcp_meta_tools(tmp_path):
 def test_meta_tool_activate_unknown_returns_error():
     m = MCPManager({"demo": {"command": "x"}})
     m.start_lazy()
-    from agent_core.tools.base import ToolRegistry
+    from local_automata_core.tools.base import ToolRegistry
 
     try:
         meta = {t.name: t for t in build_mcp_meta_tools(m, ToolRegistry())}

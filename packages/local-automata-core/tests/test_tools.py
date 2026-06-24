@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from agent_core.tools import Workspace, build_registry
+from local_automata_core.tools import Workspace, build_registry
 
 
 def reg_map(tmp_path, names=None, allow_install=False):
@@ -114,7 +114,7 @@ def test_run_command_forces_matplotlib_agg(tmp_path):
 
 
 def test_truncate_middle_keeps_head_and_tail():
-    from agent_core.tools.base import truncate_middle
+    from local_automata_core.tools.base import truncate_middle
 
     short = "abc"
     assert truncate_middle(short, 100) == short  # 上限以内は素通し
@@ -158,7 +158,7 @@ def test_workspace_new_session_and_name(tmp_path):
 def test_new_session_unique_same_timestamp(tmp_path, monkeypatch):
     # 同じ秒に複数起動しても別フォルダになり、出力が混ざらない
     monkeypatch.setattr(
-        "agent_core.tools.workspace.session_timestamp", lambda: "20260101-000000"
+        "local_automata_core.tools.workspace.session_timestamp", lambda: "20260101-000000"
     )
     a = Workspace.new_session(tmp_path)
     b = Workspace.new_session(tmp_path)
@@ -207,9 +207,9 @@ def test_workspace_rename_tracks_root(tmp_path):
 def test_dispatch_agent_explores_and_summarizes(tmp_path):
     # サブエージェント探索: 子が grep して結論だけを返す（書き込みツールは持たない）。
     from types import SimpleNamespace
-    from agent_core.config import Config
-    from agent_core.tools.workspace import Workspace
-    from agent_core.tools.subagent import build_dispatch_agent_tool, DISPATCH_AGENT_TOOL
+    from local_automata_core.config import Config
+    from local_automata_core.tools.workspace import Workspace
+    from local_automata_core.tools.subagent import build_dispatch_agent_tool, DISPATCH_AGENT_TOOL
     from conftest import msg, tool_call
 
     ws = Workspace(str(tmp_path / "ws"))
@@ -245,9 +245,9 @@ def test_dispatch_agent_explores_and_summarizes(tmp_path):
 
 def test_dispatch_agent_registered_when_read_tools_present(tmp_path):
     # build_agent 経由で read 系ツールがあると dispatch_agent が自動登録される。
-    from agent_core import compose_agent as build_agent
-    from agent_core.config import Config
-    from agent_core.settings import AgentConfig
+    from local_automata_core import compose_agent as build_agent
+    from local_automata_core.config import Config
+    from local_automata_core.settings import AgentConfig
 
     agent = build_agent(
         Config(), AgentConfig(tools=["read_file", "grep"]), str(tmp_path / "ws"), planning=False
@@ -259,10 +259,10 @@ def test_view_image_queues_image_and_flushes(tmp_path):
     # view_image は workspace 内の画像をモデルへの視覚入力として待避し、
     # _flush_pending で次ターンのユーザー発話（image_url 付き）に流し込む。
     import base64
-    from agent_core import Agent
-    from agent_core.config import Config
-    from agent_core.tools.workspace import Workspace
-    from agent_core.tools.vision import build_view_image_tool, VIEW_IMAGE_TOOL
+    from local_automata_core import Agent
+    from local_automata_core.config import Config
+    from local_automata_core.tools.workspace import Workspace
+    from local_automata_core.tools.vision import build_view_image_tool, VIEW_IMAGE_TOOL
 
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -291,10 +291,10 @@ def test_view_image_queues_image_and_flushes(tmp_path):
 
 
 def test_view_image_jail_and_missing(tmp_path):
-    from agent_core import Agent
-    from agent_core.config import Config
-    from agent_core.tools.workspace import Workspace
-    from agent_core.tools.vision import build_view_image_tool
+    from local_automata_core import Agent
+    from local_automata_core.config import Config
+    from local_automata_core.tools.workspace import Workspace
+    from local_automata_core.tools.vision import build_view_image_tool
 
     ws = Workspace(str(tmp_path / "ws"))
     ws.ensure()
@@ -314,10 +314,10 @@ def test_view_image_jail_and_missing(tmp_path):
 def test_read_pdf_pages_queues_images(tmp_path):
     # read_pdf_pages は workspace 内の PDF をページ画像として待避キューへ積む。
     import pymupdf
-    from agent_core import Agent
-    from agent_core.config import Config
-    from agent_core.tools.workspace import Workspace
-    from agent_core.tools.vision import build_read_pdf_pages_tool, READ_PDF_PAGES_TOOL
+    from local_automata_core import Agent
+    from local_automata_core.config import Config
+    from local_automata_core.tools.workspace import Workspace
+    from local_automata_core.tools.vision import build_read_pdf_pages_tool, READ_PDF_PAGES_TOOL
 
     ws = Workspace(str(tmp_path / "ws"))
     ws.ensure()
@@ -347,10 +347,10 @@ def test_read_pdf_pages_queues_images(tmp_path):
 
 
 def test_read_pdf_pages_jail_and_errors(tmp_path):
-    from agent_core import Agent
-    from agent_core.config import Config
-    from agent_core.tools.workspace import Workspace
-    from agent_core.tools.vision import build_read_pdf_pages_tool
+    from local_automata_core import Agent
+    from local_automata_core.config import Config
+    from local_automata_core.tools.workspace import Workspace
+    from local_automata_core.tools.vision import build_read_pdf_pages_tool
 
     ws = Workspace(str(tmp_path / "ws"))
     ws.ensure()
@@ -371,9 +371,9 @@ def test_read_pdf_pages_jail_and_errors(tmp_path):
 
 
 def test_read_pdf_pages_registered_via_attach(tmp_path):
-    from agent_core import Agent
-    from agent_core.config import Config
-    from agent_core.tools import attach_agentic_tools, Workspace
+    from local_automata_core import Agent
+    from local_automata_core.config import Config
+    from local_automata_core.tools import attach_agentic_tools, Workspace
 
     class FakeLLM:
         def chat(self, *a, **k):
@@ -388,9 +388,9 @@ def test_read_pdf_pages_registered_via_attach(tmp_path):
 
 
 def test_view_image_and_dispatch_registered_via_build_agent(tmp_path):
-    from agent_core import compose_agent as build_agent
-    from agent_core.config import Config
-    from agent_core.settings import AgentConfig
+    from local_automata_core import compose_agent as build_agent
+    from local_automata_core.config import Config
+    from local_automata_core.settings import AgentConfig
 
     agent = build_agent(
         Config(), AgentConfig(tools=["read_file"]), str(tmp_path / "ws"), planning=False
@@ -401,9 +401,9 @@ def test_view_image_and_dispatch_registered_via_build_agent(tmp_path):
 
 def test_attach_agentic_tools_registers_both(tmp_path):
     # ライブラリから手で組んだ Agent に view_image / dispatch_agent を1行で付けられる。
-    from agent_core import Agent
-    from agent_core.config import Config
-    from agent_core.tools import attach_agentic_tools, Workspace
+    from local_automata_core import Agent
+    from local_automata_core.config import Config
+    from local_automata_core.tools import attach_agentic_tools, Workspace
 
     class FakeLLM:
         def chat(self, *a, **k):
