@@ -10,14 +10,6 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 
-[manifest]
-members = [
-    "local-automata-core",
-]
-
-[manifest.dependency-groups]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
-
 [[package]]
 name = "annotated-doc"
 version = "0.0.4"
@@ -496,7 +488,7 @@ wheels = [
 [[package]]
 name = "local-automata-core"
 version = "0.3.0"
-source = { editable = "packages/local-automata-core" }
+source = { editable = "." }
 dependencies = [
     { name = "local-llm-client" },
     { name = "mcp" },
@@ -504,6 +496,11 @@ dependencies = [
     { name = "pymupdf" },
     { name = "pypdf" },
     { name = "pyyaml" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
 ]
 
 [package.metadata]
@@ -515,6 +512,9 @@ requires-dist = [
     { name = "pypdf", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "local-llm-client"
