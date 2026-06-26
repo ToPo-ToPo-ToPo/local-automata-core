@@ -1,18 +1,16 @@
-# local-automata-core (workspace)
+# local-automata-core
 
-エージェント共有コア（L3）の uv workspace。
-
-| パッケージ | 層 | 役割 |
-|---|---|---|
-| [`local-automata-core`](packages/local-automata-core) | L3 | ツールフレームワーク・共通ツール・MCP・エージェントループ・文脈管理（import 名 `local_automata_core`） |
-
-L2 のゲートウェイ接続クライアントは独立リポジトリ [local-llm-client](https://github.com/ToPo-ToPo-ToPo/local-llm-client)
-へ分離し、PyPI から依存する（`local-llm-client>=0.3.0`）。推論サーバー（ゲートウェイ）も別リポジトリ
+エージェント共有コア（L3、import 名 `local_automata_core`）。ツール・MCP・エージェントループ・文脈管理。
+LLM 接続は [local-llm-client](https://github.com/ToPo-ToPo-ToPo/local-llm-client)（L2、PyPI）、推論サーバーは別リポ
 [local-llm-server](https://github.com/ToPo-ToPo-ToPo/local-llm-server)。
+
+単一パッケージのリポジトリ（配布名 `local-automata-core` / import 名 `local_automata_core`）。
+利用側（フロントエンド [local-automata](https://github.com/ToPo-ToPo-ToPo/local-automata) 等）は PyPI から
+`local-automata-core>=0.3.0` で依存する。
 
 ## 開発
 
 ```bash
-uv sync            # 全メンバーを editable で同期（クロス依存も自動）
-uv run pytest      # 全パッケージのテスト
+uv sync          # 依存を同期（local-llm-client は PyPI から解決）
+uv run pytest    # テスト
 ```
