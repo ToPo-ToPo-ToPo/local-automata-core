@@ -1,13 +1,14 @@
 # local-automata-core (workspace)
 
-エージェント共有コアの uv workspace（モノレポ）。2 パッケージ:
+エージェント共有コア（L3）の uv workspace。
 
 | パッケージ | 層 | 役割 |
 |---|---|---|
-| [`local-llm-client`](packages/local-llm-client) | L2 | ゲートウェイ接続クライアント（respond/stream/画像/tool-calling 整形・解析） |
 | [`local-automata-core`](packages/local-automata-core) | L3 | ツールフレームワーク・共通ツール・MCP・エージェントループ・文脈管理（import 名 `local_automata_core`） |
 
-推論サーバー（ゲートウェイ）は別リポジトリ [local-llm-server](https://github.com/ToPo-ToPo-ToPo/local-llm-server)。
+L2 のゲートウェイ接続クライアントは独立リポジトリ [local-llm-client](https://github.com/ToPo-ToPo-ToPo/local-llm-client)
+へ分離し、PyPI から依存する（`local-llm-client>=0.3.0`）。推論サーバー（ゲートウェイ）も別リポジトリ
+[local-llm-server](https://github.com/ToPo-ToPo-ToPo/local-llm-server)。
 
 ## 開発
 

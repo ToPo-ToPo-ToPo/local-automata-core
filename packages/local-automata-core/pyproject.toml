@@ -15,10 +15,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-# L2 クライアント（local-llm-client）＋ エージェント機能の依存（MCP・PDF・STT 等）。
-# 強化版 API（chat / 接続ヘルパ 等）が必要なため >=0.2.0 をピン留めする。
+# L2 クライアント（local-llm-client、独立リポジトリ／PyPI）＋ エージェント機能の依存（MCP・PDF・STT 等）。
+# 在席セッション（即時アンロード）API が必要なため >=0.3.0 をピン留めする。
 dependencies = [
-    "local-llm-client>=0.2.0",
+    "local-llm-client>=0.3.0",
     "mcp>=1.27",
     "pypdf>=4.0",
     "pymupdf>=1.24",
