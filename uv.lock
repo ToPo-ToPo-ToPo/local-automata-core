@@ -13,7 +13,6 @@ resolution-markers = [
 [manifest]
 members = [
     "local-automata-core",
-    "local-llm-client",
 ]
 
 [manifest.dependency-groups]
@@ -509,7 +508,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "local-llm-client", editable = "packages/local-llm-client" },
+    { name = "local-llm-client", specifier = ">=0.3.0" },
     { name = "mcp", specifier = ">=1.27" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.4" },
     { name = "pymupdf", specifier = ">=1.24" },
@@ -519,22 +518,15 @@ requires-dist = [
 
 [[package]]
 name = "local-llm-client"
-version = "0.2.0"
-source = { editable = "packages/local-llm-client" }
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openai" },
 ]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
+sdist = { url = "https://files.pythonhosted.org/packages/9e/db/ce4983fd8df6381121c4337a9063933a2dff913bfe42af50caf242753b6c/local_llm_client-0.3.0.tar.gz", hash = "sha256:f4754211447e2fff8bd6d590d5b8c52c281037c7f3c25e6c408a11079f7f06db", size = 21425, upload-time = "2026-06-26T16:34:56.289Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/1c/51d869a843471dd837ff93076f33678fed0f18561dd1ae833643eb49ee9d/local_llm_client-0.3.0-py3-none-any.whl", hash = "sha256:3de0b798b84fac0ad2532758a2ce00104f56ec80d1ab0cb2ede2a1a79301f625", size = 18155, upload-time = "2026-06-26T16:34:55.173Z" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "openai", specifier = ">=1.0" }]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "markdown-it-py"
