@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import subprocess
 
 from .base import Tool
@@ -56,21 +57,38 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
                 "起動し直してください。標準ライブラリで代替できないか検討してください。\n"
                 f"コマンド: {command}"
             )
+        # shell=True の子プロセス（/bin/sh）は複合コマンド（`a && b`、パイプ等）だと
+        # 自身を exec せず孫プロセスを fork する。subprocess.run の timeout は直下の sh しか
+        # kill しないため、孫（例: 無限ループの python）が orphan として CPU を食い続ける。
+        # これを防ぐため、新しいセッション（プロセスグループ）で起動し、タイムアウト時は
+        # グループ全体に SIGKILL を送って子孫ごと確実に始末する。
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=str(ws.root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_command_env(),
+            start_new_session=True,  # 子をプロセスグループのリーダーにする（getpgid==pid）
+        )
         try:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                cwd=str(ws.root),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=_command_env(),
-            )
+            stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
+            # 直下の sh だけでなく、その配下の孫プロセスも含めてグループごと kill する。
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            # ゾンビを残さないよう刈り取る（パイプの後始末も兼ねる）。
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
             return f"Error: command timed out after {timeout}s"
         # 出力長の上限・切り詰めは中央（Agent._execute）で全ツール一律に行う。ここでは
         # 生の出力をそのまま返す（中央が先頭＋末尾を残して中央を省略する）。
-        output = proc.stdout + proc.stderr
+        output = (stdout or "") + (stderr or "")
         if output.strip():
             return f"(exit code {proc.returncode})\n{output}"
         return f"(exit code {proc.returncode}, no output)"
