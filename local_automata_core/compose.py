@@ -46,6 +46,10 @@ def _gateway_server(dirs: list[str], explicit_servers: dict) -> dict:
     return {
         "command": sys.executable,
         "args": args,
+        # ゲートウェイ（信頼できる OS デーモン）には親プロセスの env をそのまま渡す。
+        # MCP SDK の既定 env は安全キーのみに絞られ LOCAL_AIOS_* 等が落ちるため、明示的に継承させて
+        # LOCAL_AIOS_WORKSPACE / LOCAL_AIOS_CALL_TIMEOUT / LOCAL_AIOS_HARVEST_TIMEOUT を効かせる。
+        "env": dict(os.environ),
         "description": "local-AIOS OS gateway (apps routed through local-aios serve)",
     }
 
