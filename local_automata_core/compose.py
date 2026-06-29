@@ -27,13 +27,14 @@ def _mcp_cache_path() -> str:
 
 
 def build_mcp(
-    agent_config: AgentConfig, runtime: dict, *, log=_noop_log
+    agent_config: AgentConfig, runtime: dict, *, log=_noop_log, workspace: str | None = None
 ) -> "tuple[MCPManager, list, MCPManager | None]":
     """MCPManager を構築・起動し、(mcp, 提示する extra_tools, メタツール用 mcp) を返す。
 
     mcp_mode: auto（既定）=全ツールを最初から提示しプロセスは初回呼び出し時に起動 /
     on_demand=エージェントが list/activate で明示起動 / eager=起動時に全接続。
     表示は log コールバックへ（フロントエンドが差し替え。既定は無音）。
+    workspace: 出力先パラメータを持つツールに注入する作業ディレクトリ（生成物の取り込み先）。
     """
     from .mcp_client import MCPManager, resolve_call_timeout
 
@@ -46,6 +47,7 @@ def build_mcp(
         call_timeout=call_timeout,
         dirs=dirs,
         cache_path=_mcp_cache_path(),
+        workspace=os.path.abspath(workspace) if workspace else None,
     )
     if not agent_config.mcp_servers and not dirs:
         return mcp, [], None

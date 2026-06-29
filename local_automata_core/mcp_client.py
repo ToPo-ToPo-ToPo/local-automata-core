@@ -15,7 +15,6 @@ import re
 import sys
 import tempfile
 import threading
-import tomllib
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import AsyncExitStack
 from typing import Any, Callable
@@ -30,6 +29,10 @@ Logger = Callable[[str, str], None]
 _ENTRY_SCRIPTS = ("server.py", "main.py", "__main__.py")
 # 走査対象外のディレクトリ名（補助ファイル置き場・キャッシュなど）。
 _SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
+
+# ツールの「出力先ディレクトリ」を表す引数名。これらを持つツールには、呼び出し側が
+# 値を渡していなければ MCPManager の workspace（local-automata の作業ディレクトリ）を注入する。
+_WORKSPACE_PARAMS = ("workspace", "output_dir", "out_dir", "save_dir")
 
 # ツール結果に画像が含まれるとき、一時ファイルに保存してこのマーカーで参照を渡す。
 # agent 側がこのマーカーを画像メッセージ(image_url)に変換してモデルへ渡す。
@@ -129,21 +132,37 @@ def _desc_from_script(path: str) -> str | None:
     return None
 
 
-def _server_from_manifest(name: str, folder: str, manifest: str) -> tuple[str, dict] | None:
-    """フォルダ内の mcp.toml からサーバー定義を作る。command か url が必須。"""
+def _server_from_json_manifest(
+    name: str, folder: str, manifest: str
+) -> tuple[str, dict] | None:
+    """フォルダ内の .mcp.json（MCP 標準の mcpServers）からサーバー定義を作る。
+
+    AIOS 規約: **1 フォルダ＝1 サーバ**、サーバ名はフォルダ名（basename）。`mcpServers` の
+    キーはフォルダ名と一致させる（一致するエントリを採用。エントリが 1 つだけならキー名を
+    問わず採用する）。`command` か `url` のどちらか必須。`aios` など未知キーは無視する。
+    """
     try:
-        with open(manifest, "rb") as f:
-            data = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
+        with open(manifest, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or (not data.get("command") and not data.get("url")):
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict) or not servers:
+        return None
+    # フォルダ名一致を優先。無ければエントリが 1 つのときだけ採用（曖昧さを避ける）。
+    entry = servers.get(name)
+    if entry is None:
+        if len(servers) != 1:
+            return None
+        entry = next(iter(servers.values()))
+    if not isinstance(entry, dict) or (not entry.get("command") and not entry.get("url")):
         return None
     cfg: dict = {}
     for key in ("command", "args", "env", "url", "description", "timeout"):
-        if key in data:
-            cfg[key] = data[key]
+        if key in entry:
+            cfg[key] = entry[key]
     # cwd は既定でフォルダ。相対指定はフォルダ基準で解決する。
-    cwd = data.get("cwd")
+    cwd = entry.get("cwd")
     if cwd:
         cfg["cwd"] = cwd if os.path.isabs(cwd) else os.path.join(folder, cwd)
     elif not cfg.get("url"):
@@ -163,10 +182,10 @@ def _server_from_script(name: str, cwd: str, script: str) -> tuple[str, dict]:
 
 
 def _server_from_folder(name: str, folder: str) -> tuple[str, dict] | None:
-    """フォルダ1個からサーバー定義を作る。mcp.toml を優先し、無ければエントリスクリプト。"""
-    manifest = os.path.join(folder, "mcp.toml")
+    """フォルダ1個からサーバー定義を作る。.mcp.json を優先し、無ければエントリスクリプト。"""
+    manifest = os.path.join(folder, ".mcp.json")
     if os.path.isfile(manifest):
-        return _server_from_manifest(name, folder, manifest)
+        return _server_from_json_manifest(name, folder, manifest)
     for entry in (*_ENTRY_SCRIPTS, f"{name}.py"):
         path = os.path.join(folder, entry)
         if os.path.isfile(path):
@@ -202,7 +221,7 @@ def discover_servers(dirs: list[str]) -> dict[str, dict]:
     """ディレクトリ群を走査し、見つけた MCP サーバー定義（名前→cfg）を返す。
 
     各ディレクトリ直下について:
-      - サブフォルダ `<name>/` … `mcp.toml` があればそれ、無ければ
+      - サブフォルダ `<name>/` … `.mcp.json`（標準 mcpServers）があればそれ、無ければ
         `server.py`/`main.py`/`<name>.py` を現在の Python で起動。
       - 単体ファイル `<name>.py` … 現在の Python で起動（_ 始まりは無視）。
     名前は basename。先に見つかった定義を優先する（重複名は無視）。
@@ -244,8 +263,13 @@ class MCPManager:
         call_timeout: float | None = 120.0,
         dirs: list[str] | None = None,
         cache_path: str | None = None,
+        workspace: str | None = None,
     ) -> None:
         self._servers = servers or {}
+        # ツールが出力先パラメータ（workspace/output_dir 等）を持つとき、未指定なら
+        # ここを注入する。AIOS のアプリが生成物を local-automata の作業ディレクトリ側に
+        # 書き出せるようにするための橋渡し（絶対パスを渡す）。
+        self._workspace = workspace
         # AIOS フォルダ方式: ここを走査して見つけたサーバーもカタログに加える。
         # 走査は catalog()/activate() のたびに行うので、起動後に置いたツールも拾える。
         self._dirs = list(dirs or [])
@@ -512,8 +536,28 @@ class MCPManager:
                 cwd=cfg.get("cwd"),
             )
             read, write = await stack.enter_async_context(stdio_client(params))
-        session = await stack.enter_async_context(ClientSession(read, write))
+
+        # サーバーが実行中に送る logging 通知（ctx.log / 進捗テキスト）を拾い、log へ流す。
+        # 長時間ツール（例: 自然言語→CAD）の途中経過を CLI/GUI に出すために使う。
+        async def _on_log(params: Any) -> None:
+            try:
+                logger = getattr(params, "logger", None)
+                data = getattr(params, "data", "")
+                text = data if isinstance(data, str) else str(data)
+                detail = f"{name}[{logger}]: {text}" if logger else f"{name}: {text}"
+                self._log("mcp", detail)
+            except Exception:  # noqa: BLE001 - 表示の失敗で本処理を止めない
+                pass
+
+        session = await stack.enter_async_context(
+            ClientSession(read, write, logging_callback=_on_log)
+        )
         await session.initialize()
+        # サーバーへ logging の最小レベルを通知する（対応サーバーだけ。未対応は無視）。
+        try:
+            await session.set_logging_level("info")
+        except Exception:  # noqa: BLE001 - logging 非対応サーバーでも接続は続ける
+            pass
         listed = await session.list_tools()
         tools = [self._wrap(name, cfg, session, tool) for tool in listed.tools]
         log("mcp", f"{name}: {len(listed.tools)} 個のツールを取り込み")
@@ -535,8 +579,18 @@ class MCPManager:
         # サーバー個別の timeout が全体既定を上書きする。0/負で無制限（None）。
         eff = cfg.get("timeout")
         eff = self._call_timeout if eff is None else (None if eff <= 0 else eff)
+        # このツールが持つ「出力先」引数（未指定なら workspace を注入する対象）。
+        schema = getattr(tool, "inputSchema", None) or {}
+        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        ws_params = [p for p in _WORKSPACE_PARAMS if p in props]
 
         def func(**kwargs: Any) -> str:
+            # 出力先が未指定なら local-automata の作業ディレクトリを注入する（生成物を
+            # AIOS 側でなく呼び出し側に書き出させる）。呼び出し側が明示した値は尊重する。
+            if self._workspace:
+                for p in ws_params:
+                    if not kwargs.get(p):
+                        kwargs[p] = self._workspace
             holder: dict[str, Any] = {}
 
             async def _call() -> Any:
