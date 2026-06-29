@@ -15,7 +15,6 @@ import re
 import sys
 import tempfile
 import threading
-import tomllib
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextlib import AsyncExitStack
 from typing import Any, Callable
@@ -129,21 +128,37 @@ def _desc_from_script(path: str) -> str | None:
     return None
 
 
-def _server_from_manifest(name: str, folder: str, manifest: str) -> tuple[str, dict] | None:
-    """フォルダ内の mcp.toml からサーバー定義を作る。command か url が必須。"""
+def _server_from_json_manifest(
+    name: str, folder: str, manifest: str
+) -> tuple[str, dict] | None:
+    """フォルダ内の .mcp.json（MCP 標準の mcpServers）からサーバー定義を作る。
+
+    AIOS 規約: **1 フォルダ＝1 サーバ**、サーバ名はフォルダ名（basename）。`mcpServers` の
+    キーはフォルダ名と一致させる（一致するエントリを採用。エントリが 1 つだけならキー名を
+    問わず採用する）。`command` か `url` のどちらか必須。`aios` など未知キーは無視する。
+    """
     try:
-        with open(manifest, "rb") as f:
-            data = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
+        with open(manifest, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or (not data.get("command") and not data.get("url")):
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict) or not servers:
+        return None
+    # フォルダ名一致を優先。無ければエントリが 1 つのときだけ採用（曖昧さを避ける）。
+    entry = servers.get(name)
+    if entry is None:
+        if len(servers) != 1:
+            return None
+        entry = next(iter(servers.values()))
+    if not isinstance(entry, dict) or (not entry.get("command") and not entry.get("url")):
         return None
     cfg: dict = {}
     for key in ("command", "args", "env", "url", "description", "timeout"):
-        if key in data:
-            cfg[key] = data[key]
+        if key in entry:
+            cfg[key] = entry[key]
     # cwd は既定でフォルダ。相対指定はフォルダ基準で解決する。
-    cwd = data.get("cwd")
+    cwd = entry.get("cwd")
     if cwd:
         cfg["cwd"] = cwd if os.path.isabs(cwd) else os.path.join(folder, cwd)
     elif not cfg.get("url"):
@@ -163,10 +178,10 @@ def _server_from_script(name: str, cwd: str, script: str) -> tuple[str, dict]:
 
 
 def _server_from_folder(name: str, folder: str) -> tuple[str, dict] | None:
-    """フォルダ1個からサーバー定義を作る。mcp.toml を優先し、無ければエントリスクリプト。"""
-    manifest = os.path.join(folder, "mcp.toml")
+    """フォルダ1個からサーバー定義を作る。.mcp.json を優先し、無ければエントリスクリプト。"""
+    manifest = os.path.join(folder, ".mcp.json")
     if os.path.isfile(manifest):
-        return _server_from_manifest(name, folder, manifest)
+        return _server_from_json_manifest(name, folder, manifest)
     for entry in (*_ENTRY_SCRIPTS, f"{name}.py"):
         path = os.path.join(folder, entry)
         if os.path.isfile(path):
@@ -202,7 +217,7 @@ def discover_servers(dirs: list[str]) -> dict[str, dict]:
     """ディレクトリ群を走査し、見つけた MCP サーバー定義（名前→cfg）を返す。
 
     各ディレクトリ直下について:
-      - サブフォルダ `<name>/` … `mcp.toml` があればそれ、無ければ
+      - サブフォルダ `<name>/` … `.mcp.json`（標準 mcpServers）があればそれ、無ければ
         `server.py`/`main.py`/`<name>.py` を現在の Python で起動。
       - 単体ファイル `<name>.py` … 現在の Python で起動（_ 始まりは無視）。
     名前は basename。先に見つかった定義を優先する（重複名は無視）。

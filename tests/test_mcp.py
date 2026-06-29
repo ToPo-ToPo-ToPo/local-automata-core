@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import socket
 import subprocess
@@ -540,27 +541,71 @@ def test_discover_folder_with_entry_script(tmp_path):
 
 
 def test_discover_folder_with_manifest(tmp_path):
-    """mcp.toml があればそれを優先。cwd 既定はフォルダ、相対 cwd はフォルダ基準。"""
+    """.mcp.json があればそれを優先。キー＝フォルダ名一致を採用。
+
+    cwd 既定はフォルダ、相対 cwd はフォルダ基準。`aios` など未知キーは無視する。
+    """
     aios = tmp_path / "AIOS"
     (aios / "opt").mkdir(parents=True)
-    (aios / "opt" / "mcp.toml").write_text(
-        'command = "julia"\n'
-        'args = ["main.jl"]\n'
-        'description = "最適化"\n'
-        'cwd = "src"\n',
+    (aios / "opt" / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "opt": {  # ← キー＝フォルダ名
+                        "command": "julia",
+                        "args": ["main.jl"],
+                        "description": "最適化",
+                        "cwd": "src",
+                        "aios": {"category": "tool"},  # 未知キー → 無視される
+                    }
+                }
+            }
+        ),
         encoding="utf-8",
     )
     found = discover_servers([str(aios)])
     assert found["opt"]["command"] == "julia"
     assert found["opt"]["description"] == "最適化"
     assert found["opt"]["cwd"] == str(aios / "opt" / "src")
+    assert "aios" not in found["opt"]  # 起動定義には混ざらない
+
+
+def test_discover_json_single_entry_key_mismatch(tmp_path):
+    """エントリが 1 つだけならキー名がフォルダ名と違っても採用（名前はフォルダ名）。"""
+    aios = tmp_path / "AIOS"
+    (aios / "weather").mkdir(parents=True)
+    (aios / "weather" / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"anything": {"url": "http://x/mcp"}}}),
+        encoding="utf-8",
+    )
+    found = discover_servers([str(aios)])
+    assert set(found) == {"weather"}  # サーバ名はフォルダ名
+    assert found["weather"]["url"] == "http://x/mcp"
+
+
+def test_discover_json_multi_entry_without_match_is_skipped(tmp_path):
+    """複数エントリでフォルダ名一致が無ければ曖昧なので採用しない。"""
+    aios = tmp_path / "AIOS"
+    (aios / "multi").mkdir(parents=True)
+    (aios / "multi" / ".mcp.json").write_text(
+        json.dumps(
+            {"mcpServers": {"a": {"command": "x"}, "b": {"command": "y"}}}
+        ),
+        encoding="utf-8",
+    )
+    assert discover_servers([str(aios)]) == {}
 
 
 def test_discover_skips_missing_and_invalid(tmp_path):
     aios = tmp_path / "AIOS"
     (aios / "empty").mkdir(parents=True)  # スクリプトもマニフェストも無い → 無視
     (aios / "bad").mkdir()
-    (aios / "bad" / "mcp.toml").write_text("foo = 1\n", encoding="utf-8")  # command/url 無し
+    (aios / "bad" / ".mcp.json").write_text(  # command/url 無し
+        json.dumps({"mcpServers": {"bad": {"description": "no launch"}}}),
+        encoding="utf-8",
+    )
+    (aios / "broken").mkdir()
+    (aios / "broken" / ".mcp.json").write_text("{ not json", encoding="utf-8")
     assert discover_servers([str(aios)]) == {}
     assert discover_servers([str(tmp_path / "missing")]) == {}  # 無いディレクトリ
 
