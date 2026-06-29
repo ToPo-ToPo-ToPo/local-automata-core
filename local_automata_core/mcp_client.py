@@ -8,11 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
-import json
 import os
 import re
-import sys
 import tempfile
 import threading
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -23,12 +20,6 @@ from .constants import project_cache_dir
 from .tools.base import Tool
 
 Logger = Callable[[str, str], None]
-
-# AIOS のようなフォルダを走査して MCP サーバーを見つけるときの規約。
-# フォルダ内のエントリスクリプト候補（マニフェストが無いときの自動起動対象）。
-_ENTRY_SCRIPTS = ("server.py", "main.py", "__main__.py")
-# 走査対象外のディレクトリ名（補助ファイル置き場・キャッシュなど）。
-_SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
 
 # ツールの「出力先ディレクトリ」を表す引数名。これらを持つツールには、呼び出し側が
 # 値を渡していなければ MCPManager の workspace（local-automata の作業ディレクトリ）を注入する。
@@ -111,140 +102,6 @@ def _safe_name(server: str, tool: str) -> str:
     return name[:64]
 
 
-# --- ディレクトリ走査によるサーバーディスカバリ（AIOS フォルダ方式） ---------
-
-
-def _desc_from_script(path: str) -> str | None:
-    """スクリプト先頭から説明を拾う。`# description:` 行か module docstring の1行目。"""
-    try:
-        with open(path, encoding="utf-8") as f:
-            head = f.read(2048)
-    except OSError:
-        return None
-    m = re.search(r"^#\s*description:\s*(.+)$", head, re.MULTILINE | re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r'^\s*[rubf]*"""(.*?)"""', head, re.DOTALL)
-    if m:
-        for line in m.group(1).strip().splitlines():
-            if line.strip():
-                return line.strip()
-    return None
-
-
-def _server_from_json_manifest(
-    name: str, folder: str, manifest: str
-) -> tuple[str, dict] | None:
-    """フォルダ内の .mcp.json（MCP 標準の mcpServers）からサーバー定義を作る。
-
-    AIOS 規約: **1 フォルダ＝1 サーバ**、サーバ名はフォルダ名（basename）。`mcpServers` の
-    キーはフォルダ名と一致させる（一致するエントリを採用。エントリが 1 つだけならキー名を
-    問わず採用する）。`command` か `url` のどちらか必須。`aios` など未知キーは無視する。
-    """
-    try:
-        with open(manifest, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    servers = data.get("mcpServers") if isinstance(data, dict) else None
-    if not isinstance(servers, dict) or not servers:
-        return None
-    # フォルダ名一致を優先。無ければエントリが 1 つのときだけ採用（曖昧さを避ける）。
-    entry = servers.get(name)
-    if entry is None:
-        if len(servers) != 1:
-            return None
-        entry = next(iter(servers.values()))
-    if not isinstance(entry, dict) or (not entry.get("command") and not entry.get("url")):
-        return None
-    cfg: dict = {}
-    for key in ("command", "args", "env", "url", "description", "timeout"):
-        if key in entry:
-            cfg[key] = entry[key]
-    # cwd は既定でフォルダ。相対指定はフォルダ基準で解決する。
-    cwd = entry.get("cwd")
-    if cwd:
-        cfg["cwd"] = cwd if os.path.isabs(cwd) else os.path.join(folder, cwd)
-    elif not cfg.get("url"):
-        cfg["cwd"] = folder
-    cfg.setdefault("description", f"(AIOS: {name})")
-    return name, cfg
-
-
-def _server_from_script(name: str, cwd: str, script: str) -> tuple[str, dict]:
-    """単体スクリプトを現在の Python で起動するサーバー定義を作る。"""
-    return name, {
-        "command": sys.executable,
-        "args": [script],
-        "cwd": cwd,
-        "description": _desc_from_script(script) or f"(AIOS: {name})",
-    }
-
-
-def _server_from_folder(name: str, folder: str) -> tuple[str, dict] | None:
-    """フォルダ1個からサーバー定義を作る。.mcp.json を優先し、無ければエントリスクリプト。"""
-    manifest = os.path.join(folder, ".mcp.json")
-    if os.path.isfile(manifest):
-        return _server_from_json_manifest(name, folder, manifest)
-    for entry in (*_ENTRY_SCRIPTS, f"{name}.py"):
-        path = os.path.join(folder, entry)
-        if os.path.isfile(path):
-            return _server_from_script(name, folder, path)
-    return None
-
-
-def _server_sig_hash(cfg: dict) -> str:
-    """サーバー定義からスキーマキャッシュ用のキーを作る。
-
-    起動方法（command/args/cwd か url）が変われば別キー。ローカルスクリプトは
-    mtime も混ぜるので、コードを編集するとキャッシュが自然に無効化される。
-    """
-    if cfg.get("url"):
-        sig = "url:" + str(cfg["url"])
-    else:
-        parts = [
-            str(cfg.get("command", "")),
-            repr(cfg.get("args", [])),
-            str(cfg.get("cwd", "")),
-        ]
-        for a in cfg.get("args", []):
-            if isinstance(a, str) and os.path.isfile(a):
-                try:
-                    parts.append(f"{a}:{os.path.getmtime(a)}")
-                except OSError:
-                    pass
-        sig = "|".join(parts)
-    return hashlib.sha1(sig.encode("utf-8")).hexdigest()
-
-
-def discover_servers(dirs: list[str]) -> dict[str, dict]:
-    """ディレクトリ群を走査し、見つけた MCP サーバー定義（名前→cfg）を返す。
-
-    各ディレクトリ直下について:
-      - サブフォルダ `<name>/` … `.mcp.json`（標準 mcpServers）があればそれ、無ければ
-        `server.py`/`main.py`/`<name>.py` を現在の Python で起動。
-      - 単体ファイル `<name>.py` … 現在の Python で起動（_ 始まりは無視）。
-    名前は basename。先に見つかった定義を優先する（重複名は無視）。
-    """
-    out: dict[str, dict] = {}
-    for d in dirs:
-        if not d or not os.path.isdir(d):
-            continue
-        for entry in sorted(os.listdir(d)):
-            path = os.path.join(d, entry)
-            if os.path.isdir(path):
-                if entry in _SKIP_DIRS or entry.startswith("."):
-                    continue
-                found = _server_from_folder(entry, path)
-            elif entry.endswith(".py") and not entry.startswith("_"):
-                found = _server_from_script(entry[:-3], d, path)
-            else:
-                continue
-            if found is not None and found[0] not in out:
-                out[found[0]] = found[1]
-    return out
-
-
 class MCPManager:
     """MCP サーバー群への接続を管理し、ツールを Tool として提供する。
 
@@ -261,20 +118,13 @@ class MCPManager:
         self,
         servers: dict[str, dict],
         call_timeout: float | None = 120.0,
-        dirs: list[str] | None = None,
-        cache_path: str | None = None,
         workspace: str | None = None,
     ) -> None:
         self._servers = servers or {}
         # ツールが出力先パラメータ（workspace/output_dir 等）を持つとき、未指定なら
-        # ここを注入する。AIOS のアプリが生成物を local-automata の作業ディレクトリ側に
-        # 書き出せるようにするための橋渡し（絶対パスを渡す）。
+        # ここを注入する。OS ゲートウェイ越しでも引数はアプリへそのまま転送されるため、
+        # ここでの注入が有効（絶対パスを渡す）。
         self._workspace = workspace
-        # AIOS フォルダ方式: ここを走査して見つけたサーバーもカタログに加える。
-        # 走査は catalog()/activate() のたびに行うので、起動後に置いたツールも拾える。
-        self._dirs = list(dirs or [])
-        # auto モードで全ツールのスキーマを保存するキャッシュ（起動なしで一覧提示するため）。
-        self._cache_path = cache_path
         self._call_timeout = call_timeout
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -295,18 +145,12 @@ class MCPManager:
         self._thread.start()
 
     def _all_servers(self) -> dict[str, dict]:
-        """設定（agent.toml）＋ディレクトリ走査で見つかったサーバーを統合する。
-
-        名前が衝突したら agent.toml 側を優先する。走査は毎回行うため、起動後に
-        AIOS フォルダへ置いたツールも次の catalog()/activate() で見える。
-        """
-        merged = discover_servers(self._dirs) if self._dirs else {}
-        merged.update(self._servers)
-        return merged
+        """接続対象サーバー（明示設定のみ）。発見は OS 層（local-aios）が担う。"""
+        return self._servers
 
     def start(self, log: Logger = _noop) -> None:
-        """全サーバーへ即時接続する（従来動作）。"""
-        if not self._servers and not self._dirs:
+        """全サーバーへ即時接続する。"""
+        if not self._servers:
             return
         self._log = log
         self._ensure_loop()
@@ -314,8 +158,8 @@ class MCPManager:
         future.result()  # 接続とツール一覧取得まで待つ
 
     def start_lazy(self, log: Logger = _noop) -> None:
-        """イベントループだけ起動し、接続は activate() 時まで遅延する（方式B）。"""
-        if not self._servers and not self._dirs:
+        """イベントループだけ起動し、接続は activate() 時まで遅延する。"""
+        if not self._servers:
             return
         self._log = log
         self._ensure_loop()
@@ -388,130 +232,6 @@ class MCPManager:
         self._tools = [t for t in self._tools if t.name not in removed_names]
         return list(removed_names)
 
-    # --- 方式A2: 全ツールを最初から提示し、プロセスは初回呼び出し時に起動する ----
-
-    def harvest(
-        self, name: str, cfg: dict, log: Logger = _noop, timeout: float = 30.0
-    ) -> list[dict]:
-        """サーバーへ一瞬だけ接続してツールのスキーマ（名前・説明・引数）を取得する。
-
-        プロセスは取得後すぐ切断する。auto モードで「起動せずに一覧を提示」するため、
-        ここで得たスキーマをキャッシュしてプロキシツールを作る。
-        """
-        self._ensure_loop()
-        stack = AsyncExitStack()
-
-        async def _do() -> list[dict]:
-            try:
-                tools = await self._connect_one(name, cfg, stack, log)
-                return [
-                    {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    }
-                    for t in tools
-                ]
-            finally:
-                await stack.aclose()
-
-        return asyncio.run_coroutine_threadsafe(_do(), self._loop).result(timeout=timeout)
-
-    def lazy_tools(self, log: Logger = _noop, harvest_timeout: float = 30.0) -> list[Tool]:
-        """全サーバーの全ツールを「プロキシツール」として返す（auto モード）。
-
-        スキーマはキャッシュ優先で取得し（無ければ一度だけ接続して取得・保存）、
-        プロセスは起動しない。プロキシは呼ばれた瞬間に該当サーバーを起動して転送する。
-        """
-        self._log = log
-        cache = self._load_cache()
-        dirty = False
-        proxies: list[Tool] = []
-        for name, cfg in self._all_servers().items():
-            key = _server_sig_hash(cfg)
-            entry = cache.get(key)
-            if entry is None:
-                try:
-                    metas = self.harvest(name, cfg, log, harvest_timeout)
-                except Exception as exc:  # noqa: BLE001 - 取得失敗でも他は続行
-                    log("mcp", f"{name}: ツール一覧の取得に失敗しました（{exc}）")
-                    continue
-                cache[key] = {"name": name, "tools": metas}
-                dirty = True
-                log("mcp", f"{name}: {len(metas)} 個のツールをスキャン（キャッシュ保存）")
-            else:
-                metas = entry.get("tools", [])
-            for m in metas:
-                proxies.append(
-                    self._make_proxy(
-                        name,
-                        m["name"],
-                        m.get("description") or "",
-                        m.get("parameters") or {"type": "object", "properties": {}},
-                    )
-                )
-        if dirty:
-            self._save_cache(cache)
-        return proxies
-
-    def _make_proxy(
-        self, server: str, safe_name: str, description: str, parameters: dict
-    ) -> Tool:
-        def func(**kwargs: Any) -> str:
-            return self._call_proxy(server, safe_name, kwargs)
-
-        return Tool(
-            name=safe_name,
-            description=description,
-            parameters=parameters,
-            func=func,
-        )
-
-    def _bound_tool(self, server: str, safe_name: str) -> Tool:
-        """サーバーを（未起動なら起動して）接続し、該当ツールの実体を返す。"""
-        for tool in self.activate(server):
-            if tool.name == safe_name:
-                return tool
-        raise RuntimeError(f"tool '{safe_name}' not found on server '{server}'")
-
-    def _call_proxy(self, server: str, safe_name: str, kwargs: dict) -> str:
-        """プロキシ呼び出し: 起動確認→転送。プロセス断は一度だけ再起動して再試行。"""
-        try:
-            return self._bound_tool(server, safe_name).func(**kwargs)
-        except KeyboardInterrupt:
-            raise
-        except KeyError:
-            return f"Error: MCP サーバー '{server}' が見つかりません。"
-        except Exception:  # noqa: BLE001 - プロセス断の可能性。畳んで張り直す
-            self.deactivate(server)
-            try:
-                return self._bound_tool(server, safe_name).func(**kwargs)
-            except KeyboardInterrupt:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 再試行も失敗ならメッセージ化
-                return (
-                    f"Error: MCP ツール '{safe_name}'（{server}）の実行に失敗しました（{exc}）。"
-                )
-
-    def _load_cache(self) -> dict:
-        if not self._cache_path or not os.path.isfile(self._cache_path):
-            return {}
-        try:
-            with open(self._cache_path, encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
-
-    def _save_cache(self, cache: dict) -> None:
-        if not self._cache_path:
-            return
-        try:
-            os.makedirs(os.path.dirname(self._cache_path), exist_ok=True)
-            with open(self._cache_path, "w", encoding="utf-8") as f:
-                json.dump(cache, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
 
     async def _connect_one(
         self, name: str, cfg: dict, stack: AsyncExitStack, log: Logger
