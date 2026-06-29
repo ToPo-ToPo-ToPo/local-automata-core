@@ -95,6 +95,28 @@ def test_stdio_server_end_to_end():
         m.close()
 
 
+def test_logging_notification_reaches_log():
+    """サーバーの logging 通知（ctx.log）が log("mcp", ...) に届く（途中経過の配信）。"""
+    pytest.importorskip("mcp")
+    logs: list[tuple[str, str]] = []
+    m = MCPManager({"demo": {"command": sys.executable, "args": [_SERVER]}})
+    m.start()
+    m._log = lambda event, detail: logs.append((event, detail))
+    try:
+        names = {t.name: t for t in m.tools()}
+        assert names["demo_log_then_return"].func() == "ok"
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not any(
+            "progress-42" in d for _, d in logs
+        ):
+            time.sleep(0.05)
+        # logger 名つきで mcp イベントとして届く
+        assert any(e == "mcp" and "progress-42" in d for e, d in logs), logs
+        assert any("demo-stream" in d for _, d in logs), logs
+    finally:
+        m.close()
+
+
 # --- Streamable HTTP（url 指定のリモート接続）-------------------------------
 
 _HTTP_SERVER = str(Path(__file__).parent.parent / "scripts" / "_verify_streamable_server.py")

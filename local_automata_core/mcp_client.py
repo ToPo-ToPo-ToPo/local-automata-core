@@ -527,8 +527,28 @@ class MCPManager:
                 cwd=cfg.get("cwd"),
             )
             read, write = await stack.enter_async_context(stdio_client(params))
-        session = await stack.enter_async_context(ClientSession(read, write))
+
+        # サーバーが実行中に送る logging 通知（ctx.log / 進捗テキスト）を拾い、log へ流す。
+        # 長時間ツール（例: 自然言語→CAD）の途中経過を CLI/GUI に出すために使う。
+        async def _on_log(params: Any) -> None:
+            try:
+                logger = getattr(params, "logger", None)
+                data = getattr(params, "data", "")
+                text = data if isinstance(data, str) else str(data)
+                detail = f"{name}[{logger}]: {text}" if logger else f"{name}: {text}"
+                self._log("mcp", detail)
+            except Exception:  # noqa: BLE001 - 表示の失敗で本処理を止めない
+                pass
+
+        session = await stack.enter_async_context(
+            ClientSession(read, write, logging_callback=_on_log)
+        )
         await session.initialize()
+        # サーバーへ logging の最小レベルを通知する（対応サーバーだけ。未対応は無視）。
+        try:
+            await session.set_logging_level("info")
+        except Exception:  # noqa: BLE001 - logging 非対応サーバーでも接続は続ける
+            pass
         listed = await session.list_tools()
         tools = [self._wrap(name, cfg, session, tool) for tool in listed.tools]
         log("mcp", f"{name}: {len(listed.tools)} 個のツールを取り込み")

@@ -4,7 +4,7 @@
 """
 import os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 mcp = FastMCP("test-server")
 
@@ -13,6 +13,13 @@ mcp = FastMCP("test-server")
 def add(a: int, b: int) -> int:
     """2数を足す"""
     return a + b
+
+
+@mcp.tool()
+async def log_then_return(ctx: Context) -> str:
+    """結果を返す前に logging 通知を1件送る（logging_callback 検証用）。"""
+    await ctx.log("info", "progress-42", logger_name="demo-stream")
+    return "ok"
 
 
 @mcp.tool()
