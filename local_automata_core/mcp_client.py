@@ -30,6 +30,10 @@ _ENTRY_SCRIPTS = ("server.py", "main.py", "__main__.py")
 # 走査対象外のディレクトリ名（補助ファイル置き場・キャッシュなど）。
 _SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv", "node_modules"}
 
+# ツールの「出力先ディレクトリ」を表す引数名。これらを持つツールには、呼び出し側が
+# 値を渡していなければ MCPManager の workspace（local-automata の作業ディレクトリ）を注入する。
+_WORKSPACE_PARAMS = ("workspace", "output_dir", "out_dir", "save_dir")
+
 # ツール結果に画像が含まれるとき、一時ファイルに保存してこのマーカーで参照を渡す。
 # agent 側がこのマーカーを画像メッセージ(image_url)に変換してモデルへ渡す。
 IMAGE_MARKER = "[[MCP_IMAGE:{path}]]"
@@ -259,8 +263,13 @@ class MCPManager:
         call_timeout: float | None = 120.0,
         dirs: list[str] | None = None,
         cache_path: str | None = None,
+        workspace: str | None = None,
     ) -> None:
         self._servers = servers or {}
+        # ツールが出力先パラメータ（workspace/output_dir 等）を持つとき、未指定なら
+        # ここを注入する。AIOS のアプリが生成物を local-automata の作業ディレクトリ側に
+        # 書き出せるようにするための橋渡し（絶対パスを渡す）。
+        self._workspace = workspace
         # AIOS フォルダ方式: ここを走査して見つけたサーバーもカタログに加える。
         # 走査は catalog()/activate() のたびに行うので、起動後に置いたツールも拾える。
         self._dirs = list(dirs or [])
@@ -570,8 +579,18 @@ class MCPManager:
         # サーバー個別の timeout が全体既定を上書きする。0/負で無制限（None）。
         eff = cfg.get("timeout")
         eff = self._call_timeout if eff is None else (None if eff <= 0 else eff)
+        # このツールが持つ「出力先」引数（未指定なら workspace を注入する対象）。
+        schema = getattr(tool, "inputSchema", None) or {}
+        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        ws_params = [p for p in _WORKSPACE_PARAMS if p in props]
 
         def func(**kwargs: Any) -> str:
+            # 出力先が未指定なら local-automata の作業ディレクトリを注入する（生成物を
+            # AIOS 側でなく呼び出し側に書き出させる）。呼び出し側が明示した値は尊重する。
+            if self._workspace:
+                for p in ws_params:
+                    if not kwargs.get(p):
+                        kwargs[p] = self._workspace
             holder: dict[str, Any] = {}
 
             async def _call() -> Any:

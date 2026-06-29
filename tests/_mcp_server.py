@@ -34,5 +34,11 @@ def whereami() -> str:
     return os.getcwd()
 
 
+@mcp.tool()
+def echo_workspace(workspace: str = "") -> str:
+    """受け取った workspace をそのまま返す（出力先注入の検証用）。"""
+    return workspace or "(none)"
+
+
 if __name__ == "__main__":
     mcp.run()

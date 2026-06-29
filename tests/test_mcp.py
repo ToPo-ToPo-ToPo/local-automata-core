@@ -95,6 +95,24 @@ def test_stdio_server_end_to_end():
         m.close()
 
 
+def test_workspace_injected_when_tool_accepts_it():
+    """workspace 引数を持つツールに、未指定なら MCPManager の workspace が注入される。"""
+    pytest.importorskip("mcp")
+    servers = {"demo": {"command": sys.executable, "args": [_SERVER]}}
+    m = MCPManager(servers, workspace="/tmp/la-ws")
+    m.start()
+    try:
+        names = {t.name: t for t in m.tools()}
+        # 未指定 → 注入される
+        assert names["demo_echo_workspace"].func() == "/tmp/la-ws"
+        # 明示した値は尊重される（上書きしない）
+        assert names["demo_echo_workspace"].func(workspace="/other") == "/other"
+        # workspace 引数を持たないツールには無関係（注入されない）
+        assert names["demo_add"].func(a=1, b=2) == "3"
+    finally:
+        m.close()
+
+
 def test_logging_notification_reaches_log():
     """サーバーの logging 通知（ctx.log）が log("mcp", ...) に届く（途中経過の配信）。"""
     pytest.importorskip("mcp")
