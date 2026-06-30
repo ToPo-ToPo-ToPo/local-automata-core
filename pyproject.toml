@@ -30,7 +30,7 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/ToPo-ToPo-ToPo/local-automata-core"
 
-# local-aios（OS 層）は未公開バージョン（v0.6.1=ゲートウェイ）を git タグ固定で参照する。
+# local-aios（OS 層）は未公開バージョン（v0.6.2＝harvest キャッシュ修正）を git タグ固定で参照する。
 # PyPI 公開後は [tool.uv.sources] を外せば通常の版指定に切り替わる。
 [tool.uv.sources]
 local-aios = { git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git", tag = "v0.6.2" }
