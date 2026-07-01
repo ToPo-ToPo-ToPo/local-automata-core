@@ -2,7 +2,7 @@
 # 配布名・import 名を揃える: dist = local-automata-core / import = local_automata_core。
 # （汎用名 agent-core は他プロジェクトと衝突するため使用不可。）
 name = "local-automata-core"
-version = "0.7.15"
+version = "0.7.16"
 description = "エージェント共有コア（L3）。ツールフレームワーク・共通ツール・MCP 連携・エージェントループ・文脈管理。LLM 接続は local-llm-client（L2）に委ね、推論サーバーは別パッケージ local-llm-server。"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ classifiers = [
 # L2 クライアント（local-llm-client、独立リポジトリ／PyPI）＋ エージェント機能の依存（MCP・PDF・STT 等）。
 # 在席セッション（即時アンロード）API が必要なため >=0.3.0 をピン留めする。
 dependencies = [
-    "local-aios>=0.7.9",
+    "local-aios>=0.7.10",
     "local-llm-client>=0.3.0",
     "mcp>=1.27",
     "pypdf>=4.0",
@@ -30,10 +30,10 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/ToPo-ToPo-ToPo/local-automata-core"
 
-# local-aios（OS 層）は未公開バージョン（v0.7.9＝desktop シェル）を git タグ固定で参照する。
+# local-aios（OS 層）は未公開バージョン（v0.7.10＝desktop シェル）を git タグ固定で参照する。
 # PyPI 公開後は [tool.uv.sources] を外せば通常の版指定に切り替わる。
 [tool.uv.sources]
-local-aios = { git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git", tag = "v0.7.9" }
+local-aios = { git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git", tag = "v0.7.10" }
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
