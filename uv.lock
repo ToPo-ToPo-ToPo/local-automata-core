@@ -487,15 +487,15 @@ wheels = [
 
 [[package]]
 name = "local-aios"
-version = "0.7.10"
-source = { git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git?tag=v0.7.10#9a2aab59d4bff9847e9fd825d47a059b31143dd9" }
+version = "0.7.12"
+source = { git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git?tag=v0.7.12#9bd9b4019a4b6efb285228e56cebe41730bc6662" }
 dependencies = [
     { name = "mcp" },
 ]
 
 [[package]]
 name = "local-automata-core"
-version = "0.7.16"
+version = "0.7.17"
 source = { editable = "." }
 dependencies = [
     { name = "local-aios" },
@@ -514,7 +514,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "local-aios", git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git?tag=v0.7.10" },
+    { name = "local-aios", git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git?tag=v0.7.12" },
     { name = "local-llm-client", specifier = ">=0.3.0" },
     { name = "mcp", specifier = ">=1.27" },
     { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.4" },
