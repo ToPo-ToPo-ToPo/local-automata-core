@@ -46,6 +46,28 @@ def resolve_call_timeout(raw: float | None) -> float | None:
     return raw
 
 
+def _purge_old_tmp_images(tmp_dir: str, max_age_sec: float = 24 * 3600.0) -> None:
+    """tmp 内の古い mcp_img_* を消す（保持を有界にする）。
+
+    画像は「作るだけ」で削除機構が無いと会話のたびに無限に溜まる。会話中の参照は
+    直近だけなので、一定より古いものは安全に消せる（失敗は無視）。
+    """
+    import time
+    cutoff = time.time() - max_age_sec
+    try:
+        for name in os.listdir(tmp_dir):
+            if not name.startswith("mcp_img_"):
+                continue
+            p = os.path.join(tmp_dir, name)
+            try:
+                if os.path.getmtime(p) < cutoff:
+                    os.unlink(p)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def _save_image_block(block: Any) -> str | None:
     """画像ブロック(ImageContent)を一時ファイルに保存しパスを返す。"""
     data = getattr(block, "data", None)
@@ -56,6 +78,7 @@ def _save_image_block(block: Any) -> str | None:
     # 一時ファイルもプロジェクト内（./.local-automata/tmp/）に置く（/tmp 等の外部に出さない）。
     tmp_dir = os.path.join(project_cache_dir(), "tmp")
     os.makedirs(tmp_dir, exist_ok=True)
+    _purge_old_tmp_images(tmp_dir)   # 1日より古い一時画像は掃除（無限成長の防止）
     fd, path = tempfile.mkstemp(prefix="mcp_img_", suffix=ext, dir=tmp_dir)
     try:
         with os.fdopen(fd, "wb") as f:
