@@ -30,10 +30,15 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/ToPo-ToPo-ToPo/local-automata-core"
 
-# local-aios（OS 層）は未公開バージョン（v0.7.12＝desktop シェル）を git タグ固定で参照する。
+# local-aios（OS 層）は**兄弟配置の作業ツリーを editable 参照**する（日常開発モード）。
+# マージどころか作業ツリーの編集が即・実行環境に反映され、「マージしたのに届かない」
+# タグ pin 事故（v0.7.14 固定で #31〜#33 が未到達だった件）が構造的に起きない。
+# 兄弟リポは local-automata の scripts/bootstrap.sh が自動で clone/更新する。
+# 固定版参照（タグ・可搬スナップショット）に戻す場合は次の 1 行に差し替える:
+#   local-aios = { git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git", tag = "v0.7.15" }
 # PyPI 公開後は [tool.uv.sources] を外せば通常の版指定に切り替わる。
 [tool.uv.sources]
-local-aios = { git = "https://github.com/ToPo-ToPo-ToPo/local-aios.git", tag = "v0.7.15" }
+local-aios = { path = "../local-aios", editable = true }
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
