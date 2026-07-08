@@ -42,6 +42,6 @@ def test_file_overrides_defaults():
 
 def test_unknown_keys_ignored():
     # backend など Config に無いキーは無視される
-    c = Config.load({"backend": "mlx", "parallel": 4})
+    c = Config.load({"backend": "x", "parallel": 4})
     assert not hasattr(c, "backend")
     assert c.model == DEFAULT_MODEL

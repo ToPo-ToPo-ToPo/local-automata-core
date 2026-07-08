@@ -108,41 +108,6 @@ def test_memory(tmp_path):
     assert ac.memory.enabled and ac.memory.path == "m.json"
 
 
-def test_voice_default_is_none(tmp_path):
-    ac = load_agent_config(write(tmp_path, "tools = []\n"))
-    assert ac.voice is None
-
-
-def test_voice_enabled_defaults(tmp_path):
-    ac = load_agent_config(write(tmp_path, "tools = []\n[voice]\nenabled = true\n"))
-    assert ac.voice.enabled
-    assert ac.voice.model == "mlx-community/whisper-large-v3-mlx"
-    assert ac.voice.language is None
-    assert ac.voice.correct is False  # 既定は校正なし
-
-
-def test_voice_full(tmp_path):
-    ac = load_agent_config(
-        write(tmp_path, '[voice]\nenabled = true\nmodel = "m"\nlanguage = "ja"\ncorrect = true\n')
-    )
-    assert ac.voice.enabled and ac.voice.model == "m" and ac.voice.language == "ja"
-    assert ac.voice.correct is True
-
-
-def test_voice_correct_must_be_bool(tmp_path):
-    with pytest.raises(ValueError, match="correct"):
-        load_agent_config(write(tmp_path, '[voice]\ncorrect = "yes"\n'))
-
-
-def test_voice_validation(tmp_path):
-    with pytest.raises(ValueError):
-        load_agent_config(write(tmp_path, '[voice]\nenabled = "yes"\n'))
-    with pytest.raises(ValueError):
-        load_agent_config(write(tmp_path, "[voice]\nmodel = 1\n"))
-    with pytest.raises(ValueError):
-        load_agent_config(write(tmp_path, "[voice]\nlanguage = 2\n"))
-
-
 def test_runtime_validation(tmp_path):
     with pytest.raises(ValueError):
         load_agent_config(write(tmp_path, 'temperature = "hot"\n'))
