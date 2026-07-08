@@ -27,22 +27,6 @@ class MemoryConfig:
 
 
 @dataclass
-class VoiceConfig:
-    """音声入力（STT）の設定。enabled のときだけ Web GUI にマイク入力が出る。
-
-    音声→テキストはローカルの mlx-whisper で行う。変換後は通常のテキスト入力として
-    エージェントへ渡るため、エージェントのコアは音声を意識しない。
-    """
-
-    enabled: bool = False
-    model: str = "mlx-community/whisper-large-v3-mlx"  # 最高精度（非量子化 full large-v3）
-    language: str | None = None  # None で自動判定
-    # 文字起こし結果を LLM で校正してから入力欄へ入れる（日本語の同音異義語・漢字の
-    # 誤変換を文脈から直す）。1回 LLM 呼び出しが増えるぶん少し遅くなる。既定は無効。
-    correct: bool = False
-
-
-@dataclass
 class AgentConfig:
     """解決済みのエージェント定義（システムプロンプト＋ツールのセット）。
 
@@ -63,7 +47,6 @@ class AgentConfig:
     system_prompt: str | None = None
     tools: list[str] | None = None
     memory: MemoryConfig | None = None
-    voice: VoiceConfig | None = None
     workdir: str | None = None
     planning: bool = False
     workflow: str | None = None
@@ -217,28 +200,6 @@ def _parse_memory(section: dict) -> MemoryConfig | None:
     return MemoryConfig(enabled=enabled, path=path)
 
 
-def _parse_voice(section: dict) -> VoiceConfig | None:
-    voice = section.get("voice")
-    if voice is None:
-        return None
-    if not isinstance(voice, dict):
-        raise ValueError("voice must be a table")
-    enabled = voice.get("enabled", False)
-    if not isinstance(enabled, bool):
-        raise ValueError("voice.enabled must be a boolean")
-    default = VoiceConfig()
-    model = voice.get("model", default.model)
-    if not isinstance(model, str):
-        raise ValueError("voice.model must be a string")
-    language = voice.get("language")
-    if language is not None and not isinstance(language, str):
-        raise ValueError("voice.language must be a string")
-    correct = voice.get("correct", default.correct)
-    if not isinstance(correct, bool):
-        raise ValueError("voice.correct must be a boolean")
-    return VoiceConfig(enabled=enabled, model=model, language=language, correct=correct)
-
-
 def _select_section(
     data: dict, profile: str | None
 ) -> tuple[dict, str | None, bool]:
@@ -359,14 +320,12 @@ def load_agent_config(
             workflow = text.strip() or None
 
     memory = _parse_memory(section)
-    voice = _parse_voice(section)
     runtime = _parse_runtime(section)
     mcp_servers = _parse_mcp(section)
     return AgentConfig(
         system_prompt=system_prompt,
         tools=tools,
         memory=memory,
-        voice=voice,
         workdir=workdir,
         planning=planning,
         workflow=workflow,

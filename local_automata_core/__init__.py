@@ -1,6 +1,6 @@
 """local-automata-core — エージェント構築用の共有ツールキット。
 
-汎用ツール・MCP 連携・設定・STT・画像/PDF 変換・ワークフロー仕様パーサを提供する。
+汎用ツール・MCP 連携・設定・画像/PDF 変換・ワークフロー仕様パーサを提供する。
 **Agent ループ本体は持たない** — ループ・合成・WorkflowRunner は利用側（フロントエンド）が所有する。
 
     from local_automata_core import Config, LLMClient, build_registry
@@ -18,7 +18,6 @@ from .images import (
     video_to_image_urls,
 )
 from .settings import AgentConfig, find_config_path, load_agent_config
-from .stt import DEFAULT_STT_MODEL, Transcriber
 from .tools import (
     MemoryStore,
     Tool,
@@ -42,8 +41,6 @@ __all__ = [
     "AgentConfig",
     "load_agent_config",
     "find_config_path",
-    "Transcriber",
-    "DEFAULT_STT_MODEL",
     "build_user_content",
     "to_image_url",
     "video_to_image_urls",
