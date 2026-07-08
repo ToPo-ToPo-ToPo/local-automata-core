@@ -6,7 +6,7 @@ import threading
 import time
 from typing import IO
 
-# 端末スピナーを使うか（グローバル）。GUI（local-automata-web）では本文が SSE で
+# 端末スピナーを使うか（グローバル）。GUI では本文が SSE で
 # ブラウザへ流れるため、端末へスピナーを描くと改行・行管理だけが残って空白が溜まる。
 # その場合は set_enabled(False) で全スピナーを無効化する。CLI は既定で有効。
 _ENABLED = True

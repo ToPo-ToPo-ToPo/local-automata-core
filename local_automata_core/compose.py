@@ -1,6 +1,6 @@
 """MCP 構築ヘルパ（フロントエンド中立・再利用ツールキットの一部）。
 
-エージェント合成（compose_agent）・Agent ループ・ワークフローは利用側（local-automata）へ
+エージェント合成（compose_agent）・Agent ループ・ワークフローは利用側（フロントエンド）へ
 移した。core にはどのフロントエンド/エージェントでも共通して必要な MCP の起動・取り込みだけを
 残す。
 
@@ -31,7 +31,7 @@ def _gateway_server(dirs: list[str], explicit_servers: dict) -> dict:
 
     dirs（AIOS フォルダ）は serve の発見対象に、明示 MCP サーバ（agent.toml の
     `[mcp.servers.*]`）は mcpServers JSON に書き出して `--servers` で OS へ渡す。
-    起動は現在の Python（`-m local_aios.cli`）で行う（local-aios は core の依存）。
+    起動は現在の Python（`-m local_aios.cli`）で行う（local-aios は gateway extra の任意依存）。
     """
     args = ["-m", "local_aios.cli", "serve", *dirs]
     if explicit_servers:

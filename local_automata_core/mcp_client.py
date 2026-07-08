@@ -1,6 +1,6 @@
 """agent.toml の MCP サーバー設定からツールを取り込むためのブリッジ。
 
-MCP(Model Context Protocol)サーバーへ接続し、提供されるツールを local-automata の
+MCP(Model Context Protocol)サーバーへ接続し、提供されるツールを利用側の
 Tool として登録できるようにする。MCP SDK は非同期なので、バックグラウンドの
 イベントループで接続を保持し、同期の func から呼び出す。
 """
@@ -22,7 +22,7 @@ from .tools.base import Tool
 Logger = Callable[[str, str], None]
 
 # ツールの「出力先ディレクトリ」を表す引数名。これらを持つツールには、呼び出し側が
-# 値を渡していなければ MCPManager の workspace（local-automata の作業ディレクトリ）を注入する。
+# 値を渡していなければ MCPManager の workspace（利用側の作業ディレクトリ）を注入する。
 _WORKSPACE_PARAMS = ("workspace", "output_dir", "out_dir", "save_dir")
 
 # ツール結果に画像が含まれるとき、一時ファイルに保存してこのマーカーで参照を渡す。
@@ -75,7 +75,7 @@ def _save_image_block(block: Any) -> str | None:
         return None
     mime = getattr(block, "mimeType", "") or "image/png"
     ext = ".jpg" if "jpeg" in mime or "jpg" in mime else ".png"
-    # 一時ファイルもプロジェクト内（./.local-automata/tmp/）に置く（/tmp 等の外部に出さない）。
+    # 一時ファイルもプロジェクト内のキャッシュ配下に置く（/tmp 等の外部に出さない）。
     tmp_dir = os.path.join(project_cache_dir(), "tmp")
     os.makedirs(tmp_dir, exist_ok=True)
     _purge_old_tmp_images(tmp_dir)   # 1日より古い一時画像は掃除（無限成長の防止）
@@ -328,7 +328,7 @@ class MCPManager:
         ws_params = [p for p in _WORKSPACE_PARAMS if p in props]
 
         def func(**kwargs: Any) -> str:
-            # 出力先が未指定なら local-automata の作業ディレクトリを注入する（生成物を
+            # 出力先が未指定なら利用側の作業ディレクトリを注入する（生成物を
             # AIOS 側でなく呼び出し側に書き出させる）。呼び出し側が明示した値は尊重する。
             if self._workspace:
                 for p in ws_params:

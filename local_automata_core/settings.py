@@ -121,7 +121,7 @@ _RUNTIME_KEYS: dict[str, type | tuple[type, ...]] = {
     "verbose": bool,
     "tool_mode": str,
     "forward_tool_images": bool,  # MCPツールが返す画像をVLMへ転送するか（vision時のみ有効化）
-    "web_port": int,      # Web GUI (local-automata-web) の待受ポート。--port 未指定時の既定
+    "web_port": int,      # Web GUI の待受ポート。--port 未指定時の既定
     "mcp_call_timeout": (int, float),  # MCP ツール呼び出しの既定タイムアウト秒数（0/負で無制限）
     "mcp_mode": str,  # MCP の扱い: auto(既定)/on_demand/eager。詳細は _parse_runtime の検証を参照
     "mcp_dir": str,  # 走査して MCP サーバーを自動発見するディレクトリ（AIOS フォルダ方式）

@@ -1,15 +1,10 @@
-"""local-automata-core — エージェント共有ツールキット（L3）。
+"""local-automata-core — エージェント構築用の共有ツールキット。
 
-汎用ツール（filesystem / shell / memory / plan）・MCP 連携・LLMClient・設定・STT・画像/PDF 変換・
-ワークフロー仕様パーサ・文脈ユーティリティを提供する**再利用ツールキット**。**Agent ループ本体は
-持たない**——ループ・合成（compose_agent）・WorkflowRunner・エージェント結合ツールは、それらを使う
-側（フロントエンド local-automata や各エージェント）が所有する。LLM 接続は L2 local-llm-client、
-推論サーバーは別パッケージ local-llm-server。
+汎用ツール・MCP 連携・設定・STT・画像/PDF 変換・ワークフロー仕様パーサを提供する。
+**Agent ループ本体は持たない** — ループ・合成・WorkflowRunner は利用側（フロントエンド）が所有する。
 
     from local_automata_core import Config, LLMClient, build_registry, build_mcp
     from local_automata_core import load_agent_config, to_image_url
-
-複数のエージェント/フロントエンドが、これらの部品の上に自分のループを組む。
 """
 from __future__ import annotations
 
@@ -35,7 +30,12 @@ from .tools import (
     default_registry,
 )
 
-__version__ = "0.6.0"
+try:
+    from importlib.metadata import version
+
+    __version__ = version("local-automata-core")
+except Exception:  # インストールされていない作業ツリーからの実行
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "Config",

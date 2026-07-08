@@ -2,7 +2,7 @@
 
 外部 YAML で「決まった手順」を定義する WorkflowSpec / WorkflowStep と、その検証付きパーサ
 parse_workflow を提供する。settings.load_agent_config が agent.toml の workflow_file を読む際に
-使う。仕様に従って Agent を駆動する WorkflowRunner（Agent 結合）は利用側（local-automata）に
+使う。仕様に従って Agent を駆動する WorkflowRunner（Agent 結合）は利用側（フロントエンド）に
 ある（core は Agent ループを持たない）。
 """
 from __future__ import annotations

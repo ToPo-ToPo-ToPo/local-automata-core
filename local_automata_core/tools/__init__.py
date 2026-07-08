@@ -69,7 +69,7 @@ def default_registry(
 
 
 # 注: エージェント結合ツール（dispatch_agent / view_image / read_pdf_pages）の後付け登録
-# （attach_agentic_tools）は Agent ループとともに利用側 local-automata へ移した。core は
+# （attach_agentic_tools）は Agent ループとともに利用側（フロントエンド）へ移した。core は
 # フロントエンド非依存の汎用ツール（build_registry が組む filesystem / shell など）だけを提供する。
 
 __all__ = [
