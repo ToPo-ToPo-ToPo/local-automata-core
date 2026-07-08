@@ -548,8 +548,8 @@ def test_meta_tools_register_into_registry():
 
 def test_parse_mcp_dir_runtime(tmp_path):
     assert (
-        load_agent_config(write(tmp_path, 'mcp_dir = "AIOS"\n')).runtime["mcp_dir"]
-        == "AIOS"
+        load_agent_config(write(tmp_path, 'mcp_dir = "apps"\n')).runtime["mcp_dir"]
+        == "apps"
     )
 
 

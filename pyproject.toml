@@ -25,20 +25,8 @@ dependencies = [
     "mlx-whisper>=0.4 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
-# OS ゲートウェイ機能（build_mcp）は local-aios を実行時にサブプロセス起動する（import 依存なし）。
-# local-aios は PyPI 非公開のため必須依存にはできない。ゲートウェイを使う場合のみ、
-# 利用者が各自のソース（private git 等）から入れる。
-[project.optional-dependencies]
-gateway = ["local-aios>=0.7.15"]
-
 [project.urls]
 Repository = "https://github.com/ToPo-ToPo-ToPo/local-automata-core"
-
-# local-aios は兄弟配置の作業ツリーを editable 参照する（日常開発モード。作業ツリーの編集が即反映され、
-# タグ pin 事故を構造的に防ぐ）。兄弟リポは開発環境の bootstrap スクリプトが clone/更新する。
-# この [tool.uv.sources] は uv 専用でありビルド成果物の依存メタデータには含まれない（公開物に漏れない）。
-[tool.uv.sources]
-local-aios = { path = "../local-aios", editable = true }
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

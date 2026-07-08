@@ -168,7 +168,7 @@ class MCPManager:
         self._thread.start()
 
     def _all_servers(self) -> dict[str, dict]:
-        """接続対象サーバー（明示設定のみ）。発見は OS 層（local-aios）が担う。"""
+        """接続対象サーバー（明示設定のみ）。発見は外部（OS 層）が担う。"""
         return self._servers
 
     def start(self, log: Logger = _noop) -> None:
@@ -329,7 +329,7 @@ class MCPManager:
 
         def func(**kwargs: Any) -> str:
             # 出力先が未指定なら利用側の作業ディレクトリを注入する（生成物を
-            # AIOS 側でなく呼び出し側に書き出させる）。呼び出し側が明示した値は尊重する。
+            # 外部側でなく呼び出し側に書き出させる）。呼び出し側が明示した値は尊重する。
             if self._workspace:
                 for p in ws_params:
                     if not kwargs.get(p):
@@ -461,7 +461,7 @@ def build_mcp_meta_tools(
         for c in catalog:
             status = "起動中" if c["active"] else "停止中"
             desc = c["description"] or "(説明なし)"
-            origin = "AIOS" if c.get("source") == "dir" else "設定"
+            origin = "自動発見" if c.get("source") == "dir" else "設定"
             lines.append(
                 f"- {c['name']} [{status}] ({c['transport']}/{origin}): {desc}"
             )

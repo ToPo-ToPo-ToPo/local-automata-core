@@ -3,14 +3,13 @@
 汎用ツール・MCP 連携・設定・STT・画像/PDF 変換・ワークフロー仕様パーサを提供する。
 **Agent ループ本体は持たない** — ループ・合成・WorkflowRunner は利用側（フロントエンド）が所有する。
 
-    from local_automata_core import Config, LLMClient, build_registry, build_mcp
+    from local_automata_core import Config, LLMClient, build_registry
     from local_automata_core import load_agent_config, to_image_url
 """
 from __future__ import annotations
 
 from local_llm_client import LLMClient
 
-from .compose import build_mcp
 from .config import Config
 from .images import (
     build_user_content,
@@ -40,7 +39,6 @@ except Exception:  # インストールされていない作業ツリーから�
 __all__ = [
     "Config",
     "LLMClient",
-    "build_mcp",
     "AgentConfig",
     "load_agent_config",
     "find_config_path",

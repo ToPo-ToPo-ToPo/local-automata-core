@@ -7,6 +7,3 @@ dist/
 .venv/
 .pytest_cache/
 .python-version
-
-# local-aios OS gateway cache (when launched from here)
-.local-aios/
