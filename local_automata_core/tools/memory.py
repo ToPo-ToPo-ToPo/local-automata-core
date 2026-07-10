@@ -35,7 +35,14 @@ class MemoryStore:
         )
 
     def remember(self, content: str) -> str:
+        # 重複ガード: モデルは同じ内容で remember を繰り返し呼ぶことがある
+        # (エージェントループはツールの反復呼び出しを制限しないため、1ターンで
+        # 同一内容が複数回保存される事故が実際に起きた)。空白差だけの一致も弾き、
+        # 「既に記憶済み」を明示的に返してモデルに反復をやめる合図を出す。
         items = self._load()
+        normalized = content.strip()
+        if any(m.strip() == normalized for m in items):
+            return f"既に同じ内容を記憶済みです（現在 {len(items)} 件）。"
         items.append(content)
         self._save(items)
         return f"記憶しました（現在 {len(items)} 件）。"
