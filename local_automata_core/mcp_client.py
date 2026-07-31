@@ -284,23 +284,24 @@ class MCPManager:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        if cfg.get("url"):
-            from mcp.client.streamable_http import streamable_http_client
+        async def _open_transport(st: AsyncExitStack) -> tuple[Any, Any]:
+            """トランスポートを開いて (read, write) を返す（後始末は st に積む）。"""
+            if cfg.get("url"):
+                from mcp.client.streamable_http import streamable_http_client
 
-            # 返る要素数は SDK の版で異なる（1.x は (read, write, get_session_id)、
-            # 2.0 は (read, write)）。使うのは先頭2つだけなので余分は受け流す。
-            streams = await stack.enter_async_context(
-                streamable_http_client(cfg["url"])
-            )
-            read, write = streams[0], streams[1]
-        else:
+                # 返る要素数は SDK の版で異なる（1.x は (read, write, get_session_id)、
+                # 2.0 は (read, write)）。使うのは先頭2つだけなので余分は受け流す。
+                streams = await st.enter_async_context(
+                    streamable_http_client(cfg["url"])
+                )
+                return streams[0], streams[1]
             params = StdioServerParameters(
                 command=cfg["command"],
                 args=list(cfg.get("args", [])),
                 env=cfg.get("env"),
                 cwd=cfg.get("cwd"),
             )
-            read, write = await stack.enter_async_context(stdio_client(params))
+            return await st.enter_async_context(stdio_client(params))
 
         # サーバーが実行中に送る logging 通知（ctx.log / 進捗テキスト）を拾い、log へ流す。
         # 長時間ツール（例: 自然言語→CAD）の途中経過を CLI/GUI に出すために使う。
@@ -314,15 +315,45 @@ class MCPManager:
             except Exception:  # noqa: BLE001 - 表示の失敗で本処理を止めない
                 pass
 
-        session = await stack.enter_async_context(
-            ClientSession(read, write, logging_callback=_on_log)
-        )
-        await session.initialize()
-        # サーバーへ logging の最小レベルを通知する（対応サーバーだけ。未対応は無視）。
+        async def _connect(modern: bool) -> tuple[AsyncExitStack, Any]:
+            """1 回分の接続を張ってハンドシェイクまで済ませる。
+
+            modern=True は discover()（規約 2026-07-28 に入る唯一の経路。mcp 2.0 以降）、
+            False は initialize()（旧規約）。失敗時は自分が開いた資源を閉じてから送出する。
+            """
+            st = AsyncExitStack()
+            try:
+                read, write = await _open_transport(st)
+                kwargs: dict[str, Any] = {"logging_callback": _on_log}
+                if modern:
+                    # 規約 2026-07-28 で logging は「リクエスト単位の opt-in」になった
+                    # （SEP-2577。予約キー io.modelcontextprotocol/logLevel を _meta に
+                    # 載せた場合だけサーバーが送ってよい）。宣言しないと 1 行も届かない。
+                    kwargs["log_level"] = "info"
+                sess = await st.enter_async_context(
+                    ClientSession(read, write, **kwargs)
+                )
+                await (sess.discover() if modern else sess.initialize())
+                return st, sess
+            except BaseException:
+                await st.aclose()
+                raise
+
+        # mcp 2.0 以降なら新しい規約を優先する。SDK が 1.x（discover なし・log_level 引数
+        # なし）の場合と、相手が旧規約しか解釈できない場合は、接続ごと張り直して退避する。
+        modern_ok = hasattr(ClientSession, "discover")
         try:
-            await session.set_logging_level("info")
-        except Exception:  # noqa: BLE001 - logging 非対応サーバーでも接続は続ける
-            pass
+            inner, session = await _connect(modern=modern_ok)
+        except Exception:  # noqa: BLE001 - 相手が discover を解釈できないなら旧規約で
+            if not modern_ok:
+                raise
+            inner, session = await _connect(modern=False)
+            # 旧規約では logging/setLevel が有効（2.0 で廃止された経路）。
+            try:
+                await session.set_logging_level("info")
+            except Exception:  # noqa: BLE001 - logging 非対応サーバーでも接続は続ける
+                pass
+        await stack.enter_async_context(inner)
         listed = await session.list_tools()
         tools = [self._wrap(name, cfg, session, tool) for tool in listed.tools]
         log("mcp", f"{name}: {len(listed.tools)} 個のツールを取り込み")
