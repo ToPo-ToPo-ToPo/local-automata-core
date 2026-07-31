@@ -35,6 +35,27 @@ def _noop(event: str, detail: str) -> None:  # pragma: no cover
     pass
 
 
+# mcp 2.0 でモデルのフィールドが camelCase から snake_case へ改名された。camelCase は
+# pydantic の validation alias としてしか残らないので、属性読みは snake_case でないと
+# 通らない（逆に 1.x では snake_case が無い）。当パッケージは mcp>=1.27 を許容するため、
+# どちらの版でも動くよう両方の名前を順に試す。
+_MISSING = object()
+
+
+def _compat_attr(obj: Any, snake: str, camel: str, default: Any = None) -> Any:
+    """snake_case(mcp 2.x)を優先し、無ければ camelCase(mcp 1.x)を読む。"""
+    for name in (snake, camel):
+        value = getattr(obj, name, _MISSING)
+        if value is not _MISSING:
+            return value
+    return default
+
+
+def _tool_schema(tool: Any) -> dict:
+    """MCP の Tool から入力スキーマを取り出す（未定義なら空 dict）。"""
+    return _compat_attr(tool, "input_schema", "inputSchema") or {}
+
+
 def resolve_call_timeout(raw: float | None) -> float | None:
     """runtime の mcp_call_timeout を実効値へ変換する。
 
@@ -73,7 +94,7 @@ def _save_image_block(block: Any) -> str | None:
     data = getattr(block, "data", None)
     if not data:
         return None
-    mime = getattr(block, "mimeType", "") or "image/png"
+    mime = _compat_attr(block, "mime_type", "mimeType", "") or "image/png"
     ext = ".jpg" if "jpeg" in mime or "jpg" in mime else ".png"
     # 一時ファイルもプロジェクト内のキャッシュ配下に置く（/tmp 等の外部に出さない）。
     tmp_dir = os.path.join(project_cache_dir(), "tmp")
@@ -104,7 +125,7 @@ def _result_to_text(result: Any) -> str:
                 continue
         parts.append(str(block))
     out = "\n".join(parts)
-    if getattr(result, "isError", False):
+    if _compat_attr(result, "is_error", "isError", False):
         return f"Error: {out}".strip()
     return out or "(出力なし)"
 
@@ -266,11 +287,12 @@ class MCPManager:
         if cfg.get("url"):
             from mcp.client.streamable_http import streamable_http_client
 
-            # Streamable HTTP は (read, write, get_session_id) を返す。
-            # セッションID取得用の第3要素はここでは使わない。
-            read, write, _ = await stack.enter_async_context(
+            # 返る要素数は SDK の版で異なる（1.x は (read, write, get_session_id)、
+            # 2.0 は (read, write)）。使うのは先頭2つだけなので余分は受け流す。
+            streams = await stack.enter_async_context(
                 streamable_http_client(cfg["url"])
             )
+            read, write = streams[0], streams[1]
         else:
             params = StdioServerParameters(
                 command=cfg["command"],
@@ -323,7 +345,7 @@ class MCPManager:
         eff = cfg.get("timeout")
         eff = self._call_timeout if eff is None else (None if eff <= 0 else eff)
         # このツールが持つ「出力先」引数（未指定なら workspace を注入する対象）。
-        schema = getattr(tool, "inputSchema", None) or {}
+        schema = _tool_schema(tool)
         props = schema.get("properties", {}) if isinstance(schema, dict) else {}
         ws_params = [p for p in _WORKSPACE_PARAMS if p in props]
 
@@ -345,6 +367,8 @@ class MCPManager:
 
                 # call_tool が使う request id を控える。読み取りから send_request が
                 # この値を読むまで await を挟まないため、確実に一致する。
+                # mcp 2.0 では採番が Dispatcher へ移り、この属性は無い（None になる）。
+                # その版では SDK 自身が送出するので _cancel 側は何もしない（下の注記参照）。
                 holder["rid"] = getattr(session, "_request_id", None)
                 # SDK 側の read_timeout は張らない。タイムアウトの権威は外側の
                 # future.result(timeout=eff) に一本化する（両方張ると同値レースになり、
@@ -370,16 +394,21 @@ class MCPManager:
         return Tool(
             name=_safe_name(server, tool_name),
             description=tool.description or f"MCP tool {tool_name} ({server})",
-            parameters=tool.inputSchema or {"type": "object", "properties": {}},
+            parameters=_tool_schema(tool) or {"type": "object", "properties": {}},
             func=func,
         )
 
     def _cancel(self, session: Any, rid: Any) -> None:
         """実行中のリクエストをサーバーへキャンセル通知する（notifications/cancelled）。
 
-        mcp SDK はクライアント側 call_tool のキャンセルでは cancelled を自動送出しない
+        mcp 1.x はクライアント側 call_tool のキャンセルでは cancelled を自動送出しない
         （1.27 時点で実機確認）。重いサーバーのワーカーを解放させるため、call_tool が使う
         request id を指定して明示的に送る。rid 不明（疑似セッション等）なら何もしない。
+
+        mcp 2.0 では採番が Dispatcher へ移って session._request_id が無くなり、rid は必ず
+        None になる＝ここは常に何もしない。代わりに SDK 側（Dispatcher._cancel_outbound）が
+        呼び出しのキャンセル時に cancelled を送るため、呼び出し元の future.cancel() だけで
+        サーバーへ伝播する（2.0.0 で実機確認済み）。
         """
         if rid is None or self._loop is None:
             return
@@ -389,14 +418,22 @@ class MCPManager:
             ClientNotification,
         )
 
-        note = ClientNotification(
-            CancelledNotification(
-                method="notifications/cancelled",
-                params=CancelledNotificationParams(
-                    requestId=rid, reason="client cancelled"
-                ),
+        # params のフィールド名も版で異なる（1.x: requestId / 2.0: request_id）。
+        if "request_id" in CancelledNotificationParams.model_fields:
+            params = CancelledNotificationParams(
+                request_id=rid, reason="client cancelled"
             )
+        else:
+            params = CancelledNotificationParams(
+                requestId=rid, reason="client cancelled"
+            )
+        note: Any = CancelledNotification(
+            method="notifications/cancelled", params=params
         )
+        # 1.x の ClientNotification は RootModel なので通知を包む必要がある。2.0 では
+        # ただの Union 型エイリアス（＝クラスではない）なので、包まずそのまま送る。
+        if isinstance(ClientNotification, type):
+            note = ClientNotification(note)
         try:
             asyncio.run_coroutine_threadsafe(
                 session.send_notification(note), self._loop

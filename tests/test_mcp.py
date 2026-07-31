@@ -15,8 +15,10 @@ import pytest
 
 from local_automata_core.mcp_client import (
     MCPManager,
+    _compat_attr,
     _result_to_text,
     _safe_name,
+    _tool_schema,
     build_mcp_meta_tools,
     resolve_call_timeout,
 )
@@ -75,6 +77,36 @@ def test_result_to_text():
     assert _result_to_text(err).startswith("Error:")
     empty = SimpleNamespace(content=[], isError=False)
     assert _result_to_text(empty) == "(出力なし)"
+
+
+# --- mcp 1.x / 2.0 の版差（camelCase → snake_case）への追随 --------------------
+
+
+def test_compat_attr_prefers_snake_then_camel():
+    assert _compat_attr(SimpleNamespace(is_error=True), "is_error", "isError") is True
+    assert _compat_attr(SimpleNamespace(isError=True), "is_error", "isError") is True
+    # 両方あるときは 2.0 側（snake_case）を採る。
+    both = SimpleNamespace(is_error=True, isError=False)
+    assert _compat_attr(both, "is_error", "isError") is True
+    # どちらも無ければ既定値。
+    assert _compat_attr(SimpleNamespace(), "is_error", "isError", "d") == "d"
+
+
+def test_result_to_text_reads_snake_case_is_error():
+    """mcp 2.0 の CallToolResult.is_error でもエラー扱いになる。"""
+    err = SimpleNamespace(content=[SimpleNamespace(text="boom", type="text")], is_error=True)
+    assert _result_to_text(err).startswith("Error:")
+    ok = SimpleNamespace(content=[SimpleNamespace(text="hi", type="text")], is_error=False)
+    assert _result_to_text(ok) == "hi"
+
+
+def test_tool_schema_reads_both_spellings():
+    schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
+    assert _tool_schema(SimpleNamespace(input_schema=schema)) == schema   # mcp 2.0
+    assert _tool_schema(SimpleNamespace(inputSchema=schema)) == schema    # mcp 1.x
+    # スキーマ未定義（None）や属性欠落は空 dict に潰す。
+    assert _tool_schema(SimpleNamespace(input_schema=None)) == {}
+    assert _tool_schema(SimpleNamespace()) == {}
 
 
 
@@ -259,11 +291,13 @@ class _FakeSession:
         self.read_timeout = "unset"
         self._request_id = 7  # call_tool が使う想定の request id
         self.cancel_notes: list = []
+        self.last_args: dict = {}
 
     async def call_tool(
         self, name, arguments=None, read_timeout_seconds=None, progress_callback=None
     ):
         self.read_timeout = read_timeout_seconds
+        self.last_args = dict(arguments or {})
         try:
             if progress_callback and self.message:
                 await progress_callback(0.0, 1.0, self.message)
@@ -292,6 +326,31 @@ def _fake_tool(name="slow"):
     return SimpleNamespace(name=name, description=None, inputSchema=None)
 
 
+def test_wrap_handles_snake_case_tool_schema():
+    """mcp 2.0 の Tool.input_schema でも parameters と workspace 注入が効く。"""
+    schema = {
+        "type": "object",
+        "properties": {"workspace": {"type": "string"}, "q": {"type": "string"}},
+    }
+    m = _running_manager(None)
+    m._workspace = "/tmp/la-ws"
+    sess = _FakeSession(sleep=0.01)
+    try:
+        tool = m._wrap(
+            "demo",
+            {},
+            sess,
+            SimpleNamespace(name="find", description=None, input_schema=schema),
+        )
+        assert tool.parameters == schema
+        tool.func(q="x")
+        # 未指定の workspace には MCPManager の作業ディレクトリが入る。
+        assert sess.last_args["workspace"] == "/tmp/la-ws"
+        assert sess.last_args["q"] == "x"
+    finally:
+        m.close()
+
+
 def test_call_timeout_unlimited_waits():
     """call_timeout=None（無制限）なら read_timeout=None で待ち切る。"""
     m = _running_manager(None)
@@ -316,8 +375,10 @@ def test_call_timeout_positive_times_out_and_cancels():
         # call_tool の request id を指定した notifications/cancelled が送られる。
         assert len(sess.cancel_notes) == 1
         note = sess.cancel_notes[0]
-        assert note.root.method == "notifications/cancelled"
-        assert note.root.params.requestId == 7
+        # 1.x は RootModel で包む／2.0 は通知をそのまま送る。どちらでも中身を見る。
+        inner = note.root if hasattr(note, "root") else note
+        assert inner.method == "notifications/cancelled"
+        assert _compat_attr(inner.params, "request_id", "requestId") == 7
         # コルーチンもキャンセルされ、サーバー側へ伝播する（少し待つ）。
         for _ in range(50):
             if sess.cancelled:
