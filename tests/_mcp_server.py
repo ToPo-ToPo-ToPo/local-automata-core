@@ -4,9 +4,9 @@
 """
 import os
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 
-mcp = FastMCP("test-server")
+mcp = MCPServer("test-server")
 
 
 @mcp.tool()

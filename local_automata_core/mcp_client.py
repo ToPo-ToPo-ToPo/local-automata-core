@@ -35,25 +35,9 @@ def _noop(event: str, detail: str) -> None:  # pragma: no cover
     pass
 
 
-# mcp 2.0 でモデルのフィールドが camelCase から snake_case へ改名された。camelCase は
-# pydantic の validation alias としてしか残らないので、属性読みは snake_case でないと
-# 通らない（逆に 1.x では snake_case が無い）。当パッケージは mcp>=1.27 を許容するため、
-# どちらの版でも動くよう両方の名前を順に試す。
-_MISSING = object()
-
-
-def _compat_attr(obj: Any, snake: str, camel: str, default: Any = None) -> Any:
-    """snake_case(mcp 2.x)を優先し、無ければ camelCase(mcp 1.x)を読む。"""
-    for name in (snake, camel):
-        value = getattr(obj, name, _MISSING)
-        if value is not _MISSING:
-            return value
-    return default
-
-
 def _tool_schema(tool: Any) -> dict:
     """MCP の Tool から入力スキーマを取り出す（未定義なら空 dict）。"""
-    return _compat_attr(tool, "input_schema", "inputSchema") or {}
+    return getattr(tool, "input_schema", None) or {}
 
 
 def resolve_call_timeout(raw: float | None) -> float | None:
@@ -94,7 +78,7 @@ def _save_image_block(block: Any) -> str | None:
     data = getattr(block, "data", None)
     if not data:
         return None
-    mime = _compat_attr(block, "mime_type", "mimeType", "") or "image/png"
+    mime = getattr(block, "mime_type", "") or "image/png"
     ext = ".jpg" if "jpeg" in mime or "jpg" in mime else ".png"
     # 一時ファイルもプロジェクト内のキャッシュ配下に置く（/tmp 等の外部に出さない）。
     tmp_dir = os.path.join(project_cache_dir(), "tmp")
@@ -125,7 +109,7 @@ def _result_to_text(result: Any) -> str:
                 continue
         parts.append(str(block))
     out = "\n".join(parts)
-    if _compat_attr(result, "is_error", "isError", False):
+    if getattr(result, "is_error", False):
         return f"Error: {out}".strip()
     return out or "(出力なし)"
 
@@ -289,12 +273,9 @@ class MCPManager:
             if cfg.get("url"):
                 from mcp.client.streamable_http import streamable_http_client
 
-                # 返る要素数は SDK の版で異なる（1.x は (read, write, get_session_id)、
-                # 2.0 は (read, write)）。使うのは先頭2つだけなので余分は受け流す。
-                streams = await st.enter_async_context(
+                return await st.enter_async_context(
                     streamable_http_client(cfg["url"])
                 )
-                return streams[0], streams[1]
             params = StdioServerParameters(
                 command=cfg["command"],
                 args=list(cfg.get("args", [])),
@@ -315,45 +296,18 @@ class MCPManager:
             except Exception:  # noqa: BLE001 - 表示の失敗で本処理を止めない
                 pass
 
-        async def _connect(modern: bool) -> tuple[AsyncExitStack, Any]:
-            """1 回分の接続を張ってハンドシェイクまで済ませる。
-
-            modern=True は discover()（規約 2026-07-28 に入る唯一の経路。mcp 2.0 以降）、
-            False は initialize()（旧規約）。失敗時は自分が開いた資源を閉じてから送出する。
-            """
-            st = AsyncExitStack()
-            try:
-                read, write = await _open_transport(st)
-                kwargs: dict[str, Any] = {"logging_callback": _on_log}
-                if modern:
-                    # 規約 2026-07-28 で logging は「リクエスト単位の opt-in」になった
-                    # （SEP-2577。予約キー io.modelcontextprotocol/logLevel を _meta に
-                    # 載せた場合だけサーバーが送ってよい）。宣言しないと 1 行も届かない。
-                    kwargs["log_level"] = "info"
-                sess = await st.enter_async_context(
-                    ClientSession(read, write, **kwargs)
-                )
-                await (sess.discover() if modern else sess.initialize())
-                return st, sess
-            except BaseException:
-                await st.aclose()
-                raise
-
-        # mcp 2.0 以降なら新しい規約を優先する。SDK が 1.x（discover なし・log_level 引数
-        # なし）の場合と、相手が旧規約しか解釈できない場合は、接続ごと張り直して退避する。
-        modern_ok = hasattr(ClientSession, "discover")
-        try:
-            inner, session = await _connect(modern=modern_ok)
-        except Exception:  # noqa: BLE001 - 相手が discover を解釈できないなら旧規約で
-            if not modern_ok:
-                raise
-            inner, session = await _connect(modern=False)
-            # 旧規約では logging/setLevel が有効（2.0 で廃止された経路）。
-            try:
-                await session.set_logging_level("info")
-            except Exception:  # noqa: BLE001 - logging 非対応サーバーでも接続は続ける
-                pass
-        await stack.enter_async_context(inner)
+        read, write = await _open_transport(stack)
+        # log_level は「このクライアントは info 以上の logging 通知を受け取る」という宣言。
+        # 規約 2026-07-28 で logging capability が廃止され（SEP-2577）、logging/setLevel に
+        # よる接続単位の設定はなくなった。代わりに各リクエストの _meta に予約キー
+        # io.modelcontextprotocol/logLevel を載せた場合だけサーバーが送ってよい形になり、
+        # 宣言しないと 1 行も届かない。ClientSession に渡せば SDK が全リクエストへ押印する。
+        session = await stack.enter_async_context(
+            ClientSession(read, write, logging_callback=_on_log, log_level="info")
+        )
+        # 規約 2026-07-28 には discover() でしか入れない（initialize() は旧規約専用の経路）。
+        # 旧規約への退避は用意しない（当パッケージは mcp>=2.0 を要求する）。
+        await session.discover()
         listed = await session.list_tools()
         tools = [self._wrap(name, cfg, session, tool) for tool in listed.tools]
         log("mcp", f"{name}: {len(listed.tools)} 個のツールを取り込み")
@@ -387,8 +341,6 @@ class MCPManager:
                 for p in ws_params:
                     if not kwargs.get(p):
                         kwargs[p] = self._workspace
-            holder: dict[str, Any] = {}
-
             async def _call() -> Any:
                 async def on_progress(
                     progress: float, total: float | None, message: str | None
@@ -396,11 +348,6 @@ class MCPManager:
                     if message:
                         self._log("mcp", f"{tool_name}: {message}")
 
-                # call_tool が使う request id を控える。読み取りから send_request が
-                # この値を読むまで await を挟まないため、確実に一致する。
-                # mcp 2.0 では採番が Dispatcher へ移り、この属性は無い（None になる）。
-                # その版では SDK 自身が送出するので _cancel 側は何もしない（下の注記参照）。
-                holder["rid"] = getattr(session, "_request_id", None)
                 # SDK 側の read_timeout は張らない。タイムアウトの権威は外側の
                 # future.result(timeout=eff) に一本化する（両方張ると同値レースになり、
                 # かつ SDK 側タイムアウト経路はサーバーへ cancelled を送らない）。
@@ -414,11 +361,14 @@ class MCPManager:
             try:
                 return _result_to_text(future.result(timeout=eff))
             except FuturesTimeoutError:
-                self._cancel(session, holder.get("rid"))  # サーバーへ cancelled 通知
+                # future.cancel() だけでサーバーへ cancelled が飛ぶ。mcp 2.0 は呼び出しの
+                # キャンセル時に SDK（Dispatcher._cancel_outbound）が notifications/cancelled
+                # を送るため、こちらで明示送出する必要はない（1.x で必要だった手動送出は
+                # request id の採番が Dispatcher へ移って成立しなくなった）。重いサーバーの
+                # ワーカー解放は従来どおり働く。
                 future.cancel()
                 return f"Error: MCP tool '{tool_name}' timed out after {eff}s"
             except KeyboardInterrupt:
-                self._cancel(session, holder.get("rid"))
                 future.cancel()
                 raise
 
@@ -428,49 +378,6 @@ class MCPManager:
             parameters=_tool_schema(tool) or {"type": "object", "properties": {}},
             func=func,
         )
-
-    def _cancel(self, session: Any, rid: Any) -> None:
-        """実行中のリクエストをサーバーへキャンセル通知する（notifications/cancelled）。
-
-        mcp 1.x はクライアント側 call_tool のキャンセルでは cancelled を自動送出しない
-        （1.27 時点で実機確認）。重いサーバーのワーカーを解放させるため、call_tool が使う
-        request id を指定して明示的に送る。rid 不明（疑似セッション等）なら何もしない。
-
-        mcp 2.0 では採番が Dispatcher へ移って session._request_id が無くなり、rid は必ず
-        None になる＝ここは常に何もしない。代わりに SDK 側（Dispatcher._cancel_outbound）が
-        呼び出しのキャンセル時に cancelled を送るため、呼び出し元の future.cancel() だけで
-        サーバーへ伝播する（2.0.0 で実機確認済み）。
-        """
-        if rid is None or self._loop is None:
-            return
-        from mcp.types import (
-            CancelledNotification,
-            CancelledNotificationParams,
-            ClientNotification,
-        )
-
-        # params のフィールド名も版で異なる（1.x: requestId / 2.0: request_id）。
-        if "request_id" in CancelledNotificationParams.model_fields:
-            params = CancelledNotificationParams(
-                request_id=rid, reason="client cancelled"
-            )
-        else:
-            params = CancelledNotificationParams(
-                requestId=rid, reason="client cancelled"
-            )
-        note: Any = CancelledNotification(
-            method="notifications/cancelled", params=params
-        )
-        # 1.x の ClientNotification は RootModel なので通知を包む必要がある。2.0 では
-        # ただの Union 型エイリアス（＝クラスではない）なので、包まずそのまま送る。
-        if isinstance(ClientNotification, type):
-            note = ClientNotification(note)
-        try:
-            asyncio.run_coroutine_threadsafe(
-                session.send_notification(note), self._loop
-            ).result(timeout=5)
-        except Exception:  # noqa: BLE001 - 通知失敗で呼び出し側を妨げない
-            pass
 
     async def _drain(self) -> None:
         """ループ停止前に未完了タスク（キャンセル中の呼び出し等）を片付ける。"""

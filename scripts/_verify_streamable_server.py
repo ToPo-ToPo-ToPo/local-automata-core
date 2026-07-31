@@ -9,14 +9,14 @@ host / port は引数（または環境変数）で受け取り、エンドポ�
 import os
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 
 def main() -> None:
     host = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("MCP_HOST", "127.0.0.1")
     port = int(sys.argv[2] if len(sys.argv) > 2 else os.environ.get("MCP_PORT", "8765"))
 
-    mcp = FastMCP("verify-streamable", host=host, port=port)
+    mcp = MCPServer("verify-streamable")
 
     @mcp.tool()
     def add(a: int, b: int) -> int:
@@ -29,7 +29,8 @@ def main() -> None:
         return f"Hello, {name}!"
 
     # Streamable HTTP トランスポートで起動（エンドポイントは既定の /mcp）。
-    mcp.run(transport="streamable-http")
+    # mcp 2.0 では host / port はコンストラクタではなく run() に渡す。
+    mcp.run(transport="streamable-http", host=host, port=port)
 
 
 if __name__ == "__main__":

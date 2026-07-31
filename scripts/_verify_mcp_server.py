@@ -6,9 +6,9 @@
 import asyncio
 import os
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 
-mcp = FastMCP("verify-server")
+mcp = MCPServer("verify-server")
 
 
 @mcp.tool()
