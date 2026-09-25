@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fnmatch
-import glob as _glob
 import os
 import re
 import shutil
@@ -37,12 +36,9 @@ def _walk_files(base: Path, follow_links: bool = False):
 def _grep_with_rg(
     rg: str, pattern: str, rel_base: str, glob: str | None,
     ignore_case: bool, context: int, max_results: int, root: Path,
-    follow_links: bool = False,
 ) -> str:
     """ripgrep で検索する（.gitignore を尊重し高速・大規模リポジトリ向け）。"""
     cmd = [rg, "--line-number", "--no-heading", "--color=never"]
-    if follow_links:
-        cmd.append("--follow")
     if ignore_case:
         cmd.append("--ignore-case")
     if context > 0:
@@ -70,19 +66,19 @@ def _grep_with_rg(
 def _grep_python(
     base: Path, pattern: str, glob: str | None,
     ignore_case: bool, context: int, max_results: int, root: Path,
-    absolute: bool = False,
-) -> str:
-    """rg が無い環境向けの純Python検索（無視ディレクトリは枝刈り）。
+    prefix: str | None = None,
+) -> list[str]:
+    """純Python検索（無視ディレクトリは枝刈り）。一致行のリストを返す（上限で打ち切り）。
 
-    absolute=True（読むだけの場所の検索）は結果を絶対パスで示し、リンクもたどる。
+    prefix を渡すと読むだけの場所の検索: 結果は `<prefix>/<root からの相対>` で示し、リンクもたどる。
     """
     regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
     hits: list[str] = []
-    for f in _walk_files(base, follow_links=absolute):
+    for f in _walk_files(base, follow_links=prefix is not None):
         if not f.is_file():
             continue
         rel = f.relative_to(root)
-        shown = f if absolute else rel
+        shown = f"{prefix}/{rel.as_posix()}" if prefix else rel.as_posix()
         if glob and not (
             fnmatch.fnmatch(f.name, glob) or fnmatch.fnmatch(rel.as_posix(), glob)
         ):
@@ -102,57 +98,91 @@ def _grep_python(
             else:
                 hits.append(f"{shown}:{i + 1}: {line.strip()[:200]}")
             if len(hits) >= max_results:
-                hits.append(f"…（打ち切り: {max_results} 件）")
-                return "\n".join(hits)
-    return "\n".join(hits) or "(一致なし)"
+                return hits
+    return hits
 
 
-def _hidden_below(root: Path, target: Path) -> bool:
-    """root から target までに、隠し（. 始まり）や無視ディレクトリ（.venv・node_modules など）があるか。"""
-    return any(p.startswith(".") or p in _IGNORE_DIRS for p in target.relative_to(root).parts)
+def _glob_regex(pattern: str) -> re.Pattern:
+    """グロブを正規表現へ（`**/` は 0 個以上のフォルダ、`*` と `?` は `/` をまたがない）。
+
+    読むだけの場所を作業フォルダの中の `apps/…` として照合するのに使う（Path.glob は実在する
+    フォルダしか歩けないため）。Python 3.11 でも同じ規則で動くよう自前で変換する。
+    """
+    i, out = 0, []
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[" and "]" in pattern[i + 1:]:
+            j = pattern.index("]", i + 1)
+            body = pattern[i + 1:j]
+            out.append("[" + ("^" + body[1:] if body.startswith("!") else body) + "]")
+            i = j + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
 
 
-def _read_root_of(read_roots: list[Path], target: Path) -> Path | None:
-    """target を含む読むだけの場所（無ければ None）。"""
-    for r in read_roots:
-        if target == r or r in target.parents:
-            return r
-    return None
+def _mounts_of(read_roots) -> dict[str, Path]:
+    """読むだけの場所を「作業フォルダの中の名前 → 実際の場所」にする。名前はフォルダ名。
+
+    例: read_roots=[".../agents/x/apps"] なら、作業フォルダの中の `apps/` として見える。
+    """
+    mounts: dict[str, Path] = {}
+    for r in read_roots or []:
+        path = Path(os.path.abspath(os.path.expanduser(str(r))))
+        if not path.name or path.name in mounts or path.name.startswith("."):
+            raise ValueError(f"read_roots の名前（フォルダ名）が空・重複・隠しになっている: {r}")
+        mounts[path.name] = path
+    return mounts
 
 
-def _make_resolver(ws: Workspace, read_roots: list[Path] | None = None):
+def _hidden(parts) -> bool:
+    """隠し（. 始まり）や生成物のフォルダ（.venv・node_modules・build など）を含むか。"""
+    return any(p.startswith(".") or p in _IGNORE_DIRS for p in parts)
+
+
+def _make_resolver(ws: Workspace, mounts: dict[str, Path] | None = None):
     """ws.root 配下に閉じ込めたパス解決関数を作る（workspace 外へのアクセスを拒否）。
 
     root は実行時に ws.root を読むので、セッションフォルダの改名にも追従する。
 
-    read_roots は「読むだけ」なら指してよい workspace 外の場所（絶対パス）。読む道具
-    （read=True）だけが、その下を絶対パスで指せる。書く・直す道具は従来どおり workspace の中だけ。
-    判定は字面で行う（`..` は先に畳む）。場所の中のリンク（視界のアプリへのリンクなど）は
-    たどってよい — 場所を決めるのは設定を書いた人で、読むだけなので外へ書き出す経路にはならない。
-    隠しファイル・無視ディレクトリ（.git・.venv・node_modules・build など）は読ませない。
+    mounts は読むだけの場所（名前 → 実際の場所）。`apps/x.py` のように名前で始まる相対パスは
+    その場所の中を指し、読む道具（read=True）だけが通る。書く・直すは「読むだけ」で断る。
+    判定は字面で行う（`..` は先に畳む）。場所の中のリンク（視界のアプリへのリンク）はたどってよい
+    — 場所を決めるのは設定を書いた人で、読むだけなので外へ書き出す経路にはならない。
+    隠しファイルと生成物のフォルダは読ませない。
     """
-    roots = list(read_roots or [])
+    mounts = mounts or {}
 
     def resolve(path: str, read: bool = False) -> Path:
         root = ws.root
         candidate = Path(path)
         if candidate.is_absolute():
-            target = Path(os.path.normpath(candidate))
-            area = _read_root_of(roots, target)
-            if area is not None and not read:
-                raise ValueError(
-                    f"{area} は読むだけの場所です。書く・直すは workspace の中で行ってください: {path}"
-                )
-            if area is not None:
-                if _hidden_below(area, target):
-                    raise ValueError(
-                        f"隠しファイルと生成物のフォルダ（.git・.venv・node_modules・build など）は読めません: {path}"
-                    )
-                return target
-            hint = f"（読むだけなら {', '.join(map(str, roots))} の下も絶対パスで指せる）" if roots else ""
             raise ValueError(
-                f"絶対パスは使えません。workspace 相対で指定してください{hint}: {path}"
+                f"絶対パスは使えません。workspace 相対で指定してください: {path}"
             )
+        parts = Path(os.path.normpath(path)).parts
+        if parts and parts[0] in mounts:
+            if not read:
+                raise ValueError(
+                    f"{parts[0]}/ は読むだけの場所です。書く・直すは workspace の中で行ってください: {path}"
+                )
+            if _hidden(parts[1:]):
+                raise ValueError(
+                    f"隠しファイルと生成物のフォルダ（.git・.venv・node_modules・build など）は読めません: {path}"
+                )
+            return mounts[parts[0]].joinpath(*parts[1:])
         target = (root / candidate).resolve()
         if target != root and root not in target.parents:
             raise ValueError(
@@ -168,14 +198,18 @@ def build_filesystem_tools(
 ) -> list[Tool]:
     """ws（workspace）に閉じ込めたファイル/検索ツールを返す。
 
-    read_roots を渡すと、読む道具（read_file・list_dir・grep・glob）だけがその下も
-    絶対パスで指せる（アプリのコードや文書を調べる用途。書く・直すは workspace の中だけ）。
+    read_roots を渡すと、その場所が作業フォルダの中の `<フォルダ名>/` として読むだけで見える
+    （例: `apps/cad-tool/src/x.py`）。一覧・検索・グロブも作業フォルダ全体を見るときはそこを含める。
+    道具も指し方も増えない（読む・探すの届く範囲が広がるだけ）。書く・直すは workspace の中だけ。
     """
-    roots = [Path(os.path.abspath(os.path.expanduser(str(r)))) for r in (read_roots or [])]
-    resolve = _make_resolver(ws, roots)
-    # 読める場所の案内は、場所があるときだけ説明に足す（無ければ説明は従来と同じ）
-    note = (f" 作業フォルダの外でも、読むだけなら次の場所の下を絶対パスで指せる: {', '.join(map(str, roots))}"
-            if roots else "")
+    mounts = _mounts_of(read_roots)
+    resolve = _make_resolver(ws, mounts)
+
+    def mount_of(p: Path) -> tuple[str, Path] | None:
+        for name, mroot in mounts.items():
+            if p == mroot or mroot in p.parents:
+                return name, mroot
+        return None
 
     def read_file(path: str, offset: int = 0, limit: int | None = None) -> str:
         p = resolve(path, read=True)
@@ -222,10 +256,12 @@ def build_filesystem_tools(
         if p.is_file():
             return path
         entries = sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
-        if _read_root_of(roots, p) is not None:   # 読むだけの場所では隠し・生成物を見せない
-            entries = [e for e in entries if not e.name.startswith(".") and e.name not in _IGNORE_DIRS]
-        listing = "\n".join(f"{e.name}/" if e.is_dir() else e.name for e in entries)
-        return listing or "(empty directory)"
+        if mount_of(p) is not None:   # 読むだけの場所では隠し・生成物を見せない
+            entries = [e for e in entries if not _hidden([e.name])]
+        listing = [f"{e.name}/" if e.is_dir() else e.name for e in entries]
+        if p == ws.root:   # 作業フォルダの直下には、読むだけの場所（apps/ など）も並べる
+            listing = [f"{name}/" for name in mounts if f"{name}/" not in listing] + listing
+        return "\n".join(listing) or "(empty directory)"
 
     def grep(
         pattern: str,
@@ -244,46 +280,66 @@ def build_filesystem_tools(
             return f"Error: invalid regex: {exc}"
         ctx = max(0, int(context or 0))
         limit = max(1, int(max_results or 100))
-        area = _read_root_of(roots, base)
-        rg = shutil.which("rg")
-        if area is not None:
-            # 読むだけの場所: 結果は絶対パスで示し(そのまま read_file に渡せる)、アプリへのリンクもたどる
-            if rg:
-                return _grep_with_rg(rg, pattern, str(base), glob, ignore_case, ctx, limit, area,
-                                     follow_links=True)
-            return _grep_python(base, pattern, glob, ignore_case, ctx, limit, area, absolute=True)
+
+        def text(hits: list[str]) -> str:
+            if not hits:
+                return "(一致なし)"
+            if len(hits) >= limit:
+                return "\n".join(hits[:limit] + [f"…（打ち切り: {limit} 件）"])
+            return "\n".join(hits)
+
+        area = mount_of(base)
+        if area is not None:   # 読むだけの場所の中（apps/… と示す。リンクもたどる）
+            name, mroot = area
+            return text(_grep_python(base, pattern, glob, ignore_case, ctx, limit, mroot, prefix=name))
         root = ws.root
         rel_base = "." if base == root else base.relative_to(root).as_posix()
         # ripgrep があれば優先（高速・.gitignore 尊重）。無ければ純Pythonで代替。
-        if rg:
-            return _grep_with_rg(rg, pattern, rel_base, glob, ignore_case, ctx, limit, root)
-        return _grep_python(base, pattern, glob, ignore_case, ctx, limit, root)
+        rg = shutil.which("rg")
+        out = (_grep_with_rg(rg, pattern, rel_base, glob, ignore_case, ctx, limit, root) if rg
+               else text(_grep_python(base, pattern, glob, ignore_case, ctx, limit, root)))
+        if base != root or not mounts or out.startswith("Error") or "…（打ち切り" in out:
+            return out
+        # 作業フォルダ全体を探すときは、読むだけの場所（apps/ など）も探す
+        hits = [] if out == "(一致なし)" else out.splitlines()
+        for name, mroot in mounts.items():
+            if len(hits) >= limit:
+                break
+            hits += _grep_python(mroot, pattern, glob, ignore_case, ctx, limit - len(hits),
+                                 mroot, prefix=name)
+        return text(hits)
 
     def glob(pattern: str, max_results: int = 200) -> str:
-        if pattern.startswith("/"):
-            # 読むだけの場所の下のパターン。アプリへのリンクもたどり、隠し・生成物は除く
-            area = _read_root_of(roots, Path(os.path.normpath(pattern.split("*")[0] or "/")))
-            if area is None or ".." in pattern:
-                hint = f"（読むだけなら {', '.join(map(str, roots))} の下は指せる）" if roots else ""
-                return f"Error: パターンに絶対パスや '..' は使えません{hint}"
-            found = [Path(m) for m in sorted(_glob.glob(pattern, recursive=True))]
-            found = [m for m in found if _read_root_of(roots, m) is area and not _hidden_below(area, m)]
-            shown = [str(m) + ("/" if m.is_dir() else "") for m in found[:max_results]]
-            return "\n".join(shown) or "(一致なし)"
-        if ".." in pattern:
+        if pattern.startswith("/") or ".." in pattern:
             return "Error: パターンに絶対パスや '..' は使えません"
         root = ws.root
-        matches = sorted(root.glob(pattern))
-        rels = [
-            str(m.relative_to(root)) + ("/" if m.is_dir() else "")
-            for m in matches[:max_results]
-        ]
-        return "\n".join(rels) or "(一致なし)"
+        found = [str(m.relative_to(root)) + ("/" if m.is_dir() else "")
+                 for m in sorted(root.glob(pattern))]
+        # 読むだけの場所（apps/ など）も作業フォルダの中として照合する。リンクもたどり、隠し・生成物は除く
+        regex = _glob_regex(pattern)
+        head = pattern.split("/", 1)[0]
+        for name, mroot in mounts.items():
+            if len(found) >= max_results:
+                break
+            if not any(c in head for c in "*?[") and head != name:
+                continue   # 先頭が別の名前（例 src/*.py）なら、この場所は歩かない
+            if regex.match(name):
+                found.append(f"{name}/")
+            for dirpath, dirs, files in os.walk(mroot, followlinks=True):
+                dirs[:] = sorted(d for d in dirs if not _hidden([d]))
+                rel_dir = Path(dirpath).relative_to(mroot).as_posix()
+                prefix = name if rel_dir == "." else f"{name}/{rel_dir}"
+                found += [f"{prefix}/{d}/" for d in dirs if regex.match(f"{prefix}/{d}")]
+                found += [f"{prefix}/{f}" for f in sorted(files)
+                          if not f.startswith(".") and regex.match(f"{prefix}/{f}")]
+                if len(found) >= max_results:
+                    break
+        return "\n".join(found[:max_results]) or "(一致なし)"
 
     return [
         Tool(
             name="read_file",
-            description="ファイルの内容を行番号付きで読む。offset/limit で範囲指定可能。" + note,
+            description="ファイルの内容を行番号付きで読む。offset/limit で範囲指定可能。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -335,7 +391,7 @@ def build_filesystem_tools(
         ),
         Tool(
             name="list_dir",
-            description="ディレクトリの中身を一覧する。" + note,
+            description="ディレクトリの中身を一覧する。",
             parameters={
                 "type": "object",
                 "properties": {
@@ -350,7 +406,7 @@ def build_filesystem_tools(
                 "正規表現でファイル内を再帰検索し、一致行を path:行番号 付きで返す。"
                 "ripgrep があれば高速・.gitignore 尊重で検索する（無ければ純Pythonで代替）。"
                 "大規模コードベースの検索に向く。"
-            ) + note,
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -373,7 +429,7 @@ def build_filesystem_tools(
         ),
         Tool(
             name="glob",
-            description="グロブパターンでファイル/ディレクトリを探す（例: '**/*.py'）。" + note,
+            description="グロブパターンでファイル/ディレクトリを探す（例: '**/*.py'）。",
             parameters={
                 "type": "object",
                 "properties": {
