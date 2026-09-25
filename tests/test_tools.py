@@ -204,3 +204,62 @@ def test_workspace_rename_tracks_root(tmp_path):
     assert str(tmp_path / "20260101-000000_my-task") in t["run_command"].func(command="pwd")
 
 
+
+
+def _apps_view(tmp_path):
+    """視界の形: apps/<name> は本体のフォルダへのリンク。本体には .git・.venv もある。"""
+    real = tmp_path / "catalog" / "cad-tool"
+    (real / "src").mkdir(parents=True)
+    (real / "src" / "fillet.py").write_text("def fillet(radius):\n    return radius\n")
+    (real / "README.md").write_text("# cad-tool\nfillet の説明\n")
+    (real / ".git").mkdir()
+    (real / ".git" / "config").write_text("fillet secret\n")
+    (real / ".venv").mkdir()
+    (real / ".venv" / "lib.py").write_text("def fillet(): pass\n")
+    (real / ".env").write_text("TOKEN=fillet\n")
+    apps = tmp_path / "apps"
+    apps.mkdir()
+    os.symlink(str(real), str(apps / "cad-tool"))
+    return apps
+
+
+def test_read_roots_are_readable_but_not_writable(tmp_path):
+    """読むだけの場所は絶対パスで読める。書けない・外へ出られない・隠しと生成物は読めない。"""
+    apps = _apps_view(tmp_path)
+    r = build_registry(None, str(tmp_path / "ws"), read_roots=[str(apps)])
+    t = {x.name: x for x in r}
+    src = f"{apps}/cad-tool/src/fillet.py"
+    assert "1\tdef fillet(radius):" in t["read_file"].func(path=src)
+    listing = t["list_dir"].func(path=f"{apps}/cad-tool")
+    assert "src/" in listing and "README.md" in listing
+    assert ".git" not in listing and ".venv" not in listing and ".env" not in listing
+    for bad in [f"{apps}/cad-tool/.git/config", f"{apps}/cad-tool/.env",
+                f"{apps}/cad-tool/.venv/lib.py", f"{apps}/../catalog/cad-tool/README.md", "/etc/passwd"]:
+        with pytest.raises(ValueError):
+            t["read_file"].func(path=bad)
+    with pytest.raises(ValueError, match="読むだけ"):
+        t["write_file"].func(path=src, content="x")
+    with pytest.raises(ValueError, match="読むだけ"):
+        t["edit_file"].func(path=src, old="radius", new="r")
+    assert "def fillet(radius)" in (apps / "cad-tool" / "src" / "fillet.py").read_text()
+    # 場所があるときだけ説明に案内が付く（無いエージェントの説明は従来と同じ）
+    assert str(apps) in t["read_file"].description
+    assert str(apps) not in reg_map(tmp_path)["read_file"].description
+
+
+@pytest.mark.parametrize("with_rg", [True, False])
+def test_read_roots_search_follows_app_links(tmp_path, monkeypatch, with_rg):
+    """アプリへのリンクをたどって検索し、結果は read_file にそのまま渡せる絶対パスで返す。"""
+    import shutil
+    if with_rg and not shutil.which("rg"):
+        pytest.skip("ripgrep が無い")
+    if not with_rg:
+        monkeypatch.setattr("local_automata_core.tools.filesystem.shutil.which", lambda _: None)
+    apps = _apps_view(tmp_path)
+    t = {x.name: x for x in build_registry(None, str(tmp_path / "ws"), read_roots=[str(apps)])}
+    out = t["grep"].func(pattern="fillet", path=str(apps))
+    assert f"{apps}/cad-tool/src/fillet.py:1" in out and f"{apps}/cad-tool/README.md:2" in out
+    assert ".git" not in out and ".venv" not in out and ".env" not in out
+    found = t["glob"].func(pattern=f"{apps}/**/*.py")
+    assert f"{apps}/cad-tool/src/fillet.py" in found and ".venv" not in found
+    assert "Error" in t["glob"].func(pattern="/etc/*")

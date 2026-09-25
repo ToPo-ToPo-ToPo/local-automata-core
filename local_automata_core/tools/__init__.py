@@ -20,6 +20,7 @@ def build_registry(
     names: list[str] | None = None,
     workdir: str | Workspace = DEFAULT_WORKDIR,
     allow_install: bool = False,
+    read_roots: list[str] | None = None,
 ) -> ToolRegistry:
     """ツール名のリストから、workdir に閉じ込めた ToolRegistry を構築する。
 
@@ -27,6 +28,8 @@ def build_registry(
     names が None のときは全ツールを登録する。未知のツール名はエラー。
     1つでもツールを使う場合は workdir を作成する。
     allow_install=False のとき run_command はパッケージ導入コマンドをブロックする。
+    read_roots を渡すと、読む道具（read_file・list_dir・grep・glob）だけがその下も
+    絶対パスで指せる（書く・直すは workdir の中だけ）。
     """
     selected = available_tool_names() if names is None else names
     unknown = [name for name in selected if name not in BUILTIN_TOOL_NAMES]
@@ -52,7 +55,7 @@ def build_registry(
     builders = {
         tool.name: tool
         for tool in (
-            *build_filesystem_tools(ws),
+            *build_filesystem_tools(ws, read_roots),
             *build_shell_tools(ws, allow_install),
         )
     }
