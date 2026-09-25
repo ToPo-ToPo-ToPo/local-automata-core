@@ -28,8 +28,8 @@ def build_registry(
     names が None のときは全ツールを登録する。未知のツール名はエラー。
     1つでもツールを使う場合は workdir を作成する。
     allow_install=False のとき run_command はパッケージ導入コマンドをブロックする。
-    read_roots を渡すと、読む道具（read_file・list_dir・grep・glob）だけがその下も
-    絶対パスで指せる（書く・直すは workdir の中だけ）。
+    read_roots を渡すと、その場所が作業フォルダの中の `<フォルダ名>/`（例 `apps/`）として
+    読むだけで見える。読む道具（read_file・list_dir・grep・glob）はそのまま届き、書く・直すは断る。
     """
     selected = available_tool_names() if names is None else names
     unknown = [name for name in selected if name not in BUILTIN_TOOL_NAMES]

@@ -223,33 +223,33 @@ def _apps_view(tmp_path):
     return apps
 
 
-def test_read_roots_are_readable_but_not_writable(tmp_path):
-    """読むだけの場所は絶対パスで読める。書けない・外へ出られない・隠しと生成物は読めない。"""
+def test_read_roots_appear_as_a_read_only_folder_in_the_workspace(tmp_path):
+    """読むだけの場所は作業フォルダの中の apps/ として見える。読めるが書けない・外へ出られない・隠しは読めない。"""
     apps = _apps_view(tmp_path)
-    r = build_registry(None, str(tmp_path / "ws"), read_roots=[str(apps)])
-    t = {x.name: x for x in r}
-    src = f"{apps}/cad-tool/src/fillet.py"
-    assert "1\tdef fillet(radius):" in t["read_file"].func(path=src)
-    listing = t["list_dir"].func(path=f"{apps}/cad-tool")
+    t = {x.name: x for x in build_registry(None, str(tmp_path / "ws"), read_roots=[str(apps)])}
+    assert t["list_dir"].func() == "apps/"                     # 空の作業フォルダでも apps/ が見える
+    assert "1\tdef fillet(radius):" in t["read_file"].func(path="apps/cad-tool/src/fillet.py")
+    listing = t["list_dir"].func(path="apps/cad-tool")
     assert "src/" in listing and "README.md" in listing
     assert ".git" not in listing and ".venv" not in listing and ".env" not in listing
-    for bad in [f"{apps}/cad-tool/.git/config", f"{apps}/cad-tool/.env",
-                f"{apps}/cad-tool/.venv/lib.py", f"{apps}/../catalog/cad-tool/README.md", "/etc/passwd"]:
+    for bad in ["apps/cad-tool/.git/config", "apps/cad-tool/.env", "apps/cad-tool/.venv/lib.py",
+                "apps/../../catalog/cad-tool/README.md", f"{apps}/cad-tool/README.md"]:
         with pytest.raises(ValueError):
             t["read_file"].func(path=bad)
     with pytest.raises(ValueError, match="読むだけ"):
-        t["write_file"].func(path=src, content="x")
+        t["write_file"].func(path="apps/cad-tool/src/fillet.py", content="x")
     with pytest.raises(ValueError, match="読むだけ"):
-        t["edit_file"].func(path=src, old="radius", new="r")
+        t["edit_file"].func(path="apps/cad-tool/src/fillet.py", old="radius", new="r")
     assert "def fillet(radius)" in (apps / "cad-tool" / "src" / "fillet.py").read_text()
-    # 場所があるときだけ説明に案内が付く（無いエージェントの説明は従来と同じ）
-    assert str(apps) in t["read_file"].description
-    assert str(apps) not in reg_map(tmp_path)["read_file"].description
+    # 場所を渡さなければ従来どおり（apps/ は見えず、説明も変わらない）
+    plain = reg_map(tmp_path)
+    assert plain["list_dir"].func() == "(empty directory)"
+    assert plain["read_file"].description == t["read_file"].description
 
 
 @pytest.mark.parametrize("with_rg", [True, False])
-def test_read_roots_search_follows_app_links(tmp_path, monkeypatch, with_rg):
-    """アプリへのリンクをたどって検索し、結果は read_file にそのまま渡せる絶対パスで返す。"""
+def test_read_roots_are_searched_as_part_of_the_workspace(tmp_path, monkeypatch, with_rg):
+    """作業フォルダ全体の検索・グロブに apps/ も入り、結果はそのまま read_file に渡せる apps/… で返る。"""
     import shutil
     if with_rg and not shutil.which("rg"):
         pytest.skip("ripgrep が無い")
@@ -257,9 +257,12 @@ def test_read_roots_search_follows_app_links(tmp_path, monkeypatch, with_rg):
         monkeypatch.setattr("local_automata_core.tools.filesystem.shutil.which", lambda _: None)
     apps = _apps_view(tmp_path)
     t = {x.name: x for x in build_registry(None, str(tmp_path / "ws"), read_roots=[str(apps)])}
-    out = t["grep"].func(pattern="fillet", path=str(apps))
-    assert f"{apps}/cad-tool/src/fillet.py:1" in out and f"{apps}/cad-tool/README.md:2" in out
+    t["write_file"].func(path="notes.md", content="fillet を調べる\n")
+    out = t["grep"].func(pattern="fillet")
+    assert "notes.md:1" in out and "apps/cad-tool/src/fillet.py:1" in out and "apps/cad-tool/README.md:2" in out
     assert ".git" not in out and ".venv" not in out and ".env" not in out
-    found = t["glob"].func(pattern=f"{apps}/**/*.py")
-    assert f"{apps}/cad-tool/src/fillet.py" in found and ".venv" not in found
+    assert "apps/cad-tool/src/fillet.py:1" in t["grep"].func(pattern="def fillet", path="apps/cad-tool")
+    assert t["glob"].func(pattern="**/fillet.py") == "apps/cad-tool/src/fillet.py"
+    assert "apps/cad-tool/src/fillet.py" in t["glob"].func(pattern="apps/*/src/*.py")
+    assert "apps/" in t["glob"].func(pattern="*")
     assert "Error" in t["glob"].func(pattern="/etc/*")
