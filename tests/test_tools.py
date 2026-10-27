@@ -102,7 +102,8 @@ def test_install_guard(tmp_path):
 
 def test_run_command_cwd(tmp_path):
     t = reg_map(tmp_path, ["run_command"], allow_install=True)
-    out = t["run_command"].func(command="pwd")
+    # pwd はシェルで表記が違う（Git の bash は /c/...）ので、Python に作業フォルダを言わせる
+    out = t["run_command"].func(command='python -c "import os; print(os.getcwd())"')
     assert str((tmp_path / "ws").resolve()) in out
 
 
@@ -329,7 +330,10 @@ def test_run_command_timeout_leaves_no_grandchild(tmp_path):
         "time.sleep(60)\n",
         encoding="utf-8")
     t = reg_map(tmp_path, ["run_command"], allow_install=True)
-    out = t["run_command"].func(command=f"{sys.executable} child.py", timeout=3)
+    # Windows の bash では引用符なしの円記号が消えるので、実行ファイルは / 区切り・引用符付きで渡す
+    from pathlib import Path
+    exe = Path(sys.executable).as_posix()
+    out = t["run_command"].func(command=f'"{exe}" child.py', timeout=3)
     assert "timed out" in out
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -343,3 +347,41 @@ def test_run_command_timeout_leaves_no_grandchild(tmp_path):
             break
     else:
         raise AssertionError("孫プロセスがポートを握ったまま残っている")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows のシェルの選び方の確認")
+def test_posix_commands_work_on_windows_when_git_bash_is_installed(tmp_path):
+    """頭脳が書く POSIX の書き方（mkdir -p・cp・&&・cat）が Windows でもそのまま通る。
+
+    以前は cmd.exe で動き、`mkdir -p deliver` が「-p」という名前のフォルダを作り、`cp` が無いと落ちた。
+    """
+    from local_automata_core.tools.shell import find_git_bash
+
+    if not find_git_bash():
+        pytest.skip("Git for Windows が無い")
+    t = reg_map(tmp_path, ["run_command"], allow_install=True)
+    out = t["run_command"].func(
+        command="mkdir -p deliver/sub && echo hello > deliver/sub/a.txt && cp deliver/sub/a.txt deliver/b.txt && cat deliver/b.txt")
+    assert out.startswith("(exit code 0)") and "hello" in out
+    ws = tmp_path / "ws"
+    assert (ws / "deliver" / "b.txt").is_file()
+    assert not (ws / "-p").exists()
+    assert "bash" in t["run_command"].description   # 頭脳にも bash だと伝わる
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe の出力の文字コードの確認")
+def test_without_git_bash_the_brain_is_told_cmd_and_can_read_its_errors(tmp_path, monkeypatch):
+    """bash が無い Windows では cmd.exe で動くことを説明で伝え、cmd.exe のエラーを文字化けさせずに返す。
+
+    以前は出力を UTF-8 決め打ちで読み、cp932 の「'cp' は…認識されていません」が化けて、頭脳が失敗の
+    理由を読めず同じコマンドを繰り返した。
+    """
+    from local_automata_core.tools import shell
+
+    monkeypatch.setattr(shell, "find_git_bash", lambda: None)
+    t = reg_map(tmp_path, ["run_command"], allow_install=True)
+    desc = t["run_command"].description
+    assert "cmd.exe" in desc and "copy" in desc
+    out = t["run_command"].func(command="cp a.txt b.txt")
+    assert "(exit code 0" not in out
+    assert "cp" in out and "\ufffd" not in out
