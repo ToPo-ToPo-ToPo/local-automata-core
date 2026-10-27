@@ -1,11 +1,12 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten'",
-    "python_full_version < '3.12'",
+    "python_full_version >= '3.11.18' and python_full_version < '3.12'",
+    "python_full_version < '3.11.18'",
 ]
 
 [[package]]
@@ -255,8 +256,8 @@ name = "httpcore2"
 version = "2.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c0/61/afa9d6b7452f9eca73f73d45324eb0bb52f098fd5e6049bf6b8263be9b4e/httpcore2-2.16.0.tar.gz", hash = "sha256:c72cd0413563b17e1cd8354677dff887466f8ec2551679759e93126534428643", size = 69886, upload-time = "2026-10-21T07:09:45.31Z" }
 wheels = [
@@ -454,7 +455,8 @@ source = { editable = "." }
 dependencies = [
     { name = "certifi" },
     { name = "httpx2" },
-    { name = "local-llm-client" },
+    { name = "local-llm-client", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11.18'" },
+    { name = "local-llm-client", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11.18'" },
     { name = "mcp" },
     { name = "pymupdf" },
     { name = "pypdf" },
@@ -484,12 +486,34 @@ dev = [{ name = "pytest", specifier = ">=8.0" }]
 name = "local-llm-client"
 version = "0.10.1"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.11.18'",
+]
 dependencies = [
     { name = "openai" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6c/d1/006f6499dc0861ca78fada00e4272371a7d6771365511af630a67410cffd/local_llm_client-0.10.1.tar.gz", hash = "sha256:9d84b999ab5b35c99094d0bdc3e4ec8d656871c373a30822ca55407a26896912", size = 48316, upload-time = "2026-09-24T13:41:39.348Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/4f/01729b740014748e74665a2744e7194299768306303d10c24faebcf32244/local_llm_client-0.10.1-py3-none-any.whl", hash = "sha256:5ae1118adabeac340e0b3f422ec0c4784006d9b3c19b61be5b8b1cd72e79e653", size = 34101, upload-time = "2026-09-24T13:41:38.162Z" },
+]
+
+[[package]]
+name = "local-llm-client"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.11.18' and python_full_version < '3.12'",
+]
+dependencies = [
+    { name = "certifi" },
+    { name = "openai" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/79/d699a575ae2f1e79bd701f1742de73ebda5267557dc2e07c2657c5bfe99a/local_llm_client-0.10.2.tar.gz", hash = "sha256:1096cbf09c26c79db7aa94a81c949c794824a43685b39d533f3b960f20549383", size = 50263, upload-time = "2026-10-27T14:30:17.456Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/a0/72c650aa63e9ba6df6107b13c3fdb8862a7645f4aa519e55a75ae1915360/local_llm_client-0.10.2-py3-none-any.whl", hash = "sha256:7a2904078335b20b40f1522f6cf5b3c9f386362b0fd3586e19ae911da1048724", size = 34948, upload-time = "2026-10-27T14:30:16.248Z" },
 ]
 
 [[package]]
@@ -535,7 +559,8 @@ name = "networkx"
 version = "3.6.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.12'",
+    "python_full_version >= '3.11.18' and python_full_version < '3.12'",
+    "python_full_version < '3.11.18'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
 wheels = [
@@ -561,7 +586,8 @@ name = "numpy"
 version = "2.4.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.12'",
+    "python_full_version >= '3.11.18' and python_full_version < '3.12'",
+    "python_full_version < '3.11.18'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d0/ad/fed0499ce6a338d2a03ebae59cd15093910c8875328855781952abf6c2fe/numpy-2.4.6.tar.gz", hash = "sha256:f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda", size = 20735807, upload-time = "2026-05-18T23:37:14.07Z" }
 wheels = [
@@ -1403,8 +1429,8 @@ name = "uvicorn"
 version = "0.54.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
-    { name = "h11", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "click" },
+    { name = "h11" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/da/34/30e9280707135d2cfc589dfff3cb796bd07a3aeb1a3e415ba09dd89d7bb4/uvicorn-0.54.0.tar.gz", hash = "sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620", size = 112283, upload-time = "2026-09-25T06:52:37.601Z" }
 wheels = [

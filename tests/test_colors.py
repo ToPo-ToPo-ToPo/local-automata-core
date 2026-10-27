@@ -8,7 +8,8 @@ class _Tty(io.StringIO):
         return True
 
 
-def test_colorize_on_tty():
+def test_colorize_on_tty(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
     out = colorize("hi", BOLD_CYAN, stream=_Tty())
     assert out == f"{BOLD_CYAN}hi{RESET}"
 
