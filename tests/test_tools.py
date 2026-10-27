@@ -266,3 +266,80 @@ def test_read_roots_are_searched_as_part_of_the_workspace(tmp_path, monkeypatch,
     assert "apps/cad-tool/src/fillet.py" in t["glob"].func(pattern="apps/*/src/*.py")
     assert "apps/" in t["glob"].func(pattern="*")
     assert "Error" in t["glob"].func(pattern="/etc/*")
+
+
+def test_read_roots_can_hide_siblings_that_the_agent_must_not_see(tmp_path):
+    """読むだけの場所で見せる名前を絞ると、絞った外の名前はどの道具からも「存在しない」。
+
+    運用ルールには見せるアプリだけが載るのに、list_dir("apps") で隠したアプリやエンジンのフォルダが
+    見えると食い違い、頭脳が無いアプリを試して差し戻される。
+    """
+    apps = tmp_path / "apps"
+    for name in ("cad-tool", "classic-games", "CppOptopus"):
+        (apps / name / "src").mkdir(parents=True)
+        (apps / name / "README.md").write_text(f"# {name}\nfillet here\n", encoding="utf-8")
+        (apps / name / "src" / "main.py").write_text("def fillet(radius):\n    pass\n", encoding="utf-8")
+    t = {x.name: x for x in build_registry(None, str(tmp_path / "ws"),
+                                           read_roots=[("apps", apps, ["cad-tool"])])}
+    assert t["list_dir"].func() == "apps/"
+    assert t["list_dir"].func(path="apps") == "cad-tool/"                 # 隠した名前は並ばない
+    assert "fillet here" in t["read_file"].func(path="apps/cad-tool/README.md")
+    for hidden in ("apps/classic-games/README.md", "apps/CppOptopus/src/main.py"):
+        with pytest.raises(ValueError):
+            t["read_file"].func(path=hidden)
+    with pytest.raises(ValueError):
+        t["list_dir"].func(path="apps/classic-games")
+    out = t["grep"].func(pattern="fillet")
+    assert "apps/cad-tool/README.md:2" in out and "classic-games" not in out and "CppOptopus" not in out
+    out = t["grep"].func(pattern="def fillet", path="apps")
+    assert "apps/cad-tool/src/main.py:1" in out and "classic-games" not in out
+    found = t["glob"].func(pattern="apps/*/README.md")
+    assert found == "apps/cad-tool/README.md"
+    assert "classic-games" not in t["glob"].func(pattern="**/*.py")
+    # 名前を明示したタプルは、フォルダ名と違う名前で見せられる(only 無しなら全部)
+    t2 = {x.name: x for x in build_registry(None, str(tmp_path / "ws2"), read_roots=[("tools", apps)])}
+    assert "classic-games/" in t2["list_dir"].func(path="tools")
+
+
+def test_run_command_timeout_leaves_no_grandchild(tmp_path):
+    """タイムアウトしたコマンドの孫プロセス(シェル → python → 子 python)まで止まる。
+
+    以前は Windows で os.getpgid が無く AttributeError で頭脳のターンごと落ちていた。
+    """
+    import socket
+    import sys
+    import time
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    # 引用符の規則が sh と cmd.exe で違うので、コマンド行には引用符を置かずスクリプトを渡す
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    (tmp_path / "ws" / "grandchild.py").write_text(
+        "import socket,time\n"
+        "s=socket.socket()\n"
+        f"s.bind(('127.0.0.1',{port}))\n"
+        "s.listen(1)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8")
+    (tmp_path / "ws" / "child.py").write_text(
+        "import subprocess,sys,time\n"
+        "subprocess.Popen([sys.executable,'grandchild.py'])\n"
+        "time.sleep(60)\n",
+        encoding="utf-8")
+    t = reg_map(tmp_path, ["run_command"], allow_install=True)
+    out = t["run_command"].func(command=f"{sys.executable} child.py", timeout=3)
+    assert "timed out" in out
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        probe = socket.socket()
+        try:
+            probe.settimeout(0.5)
+            probe.connect(("127.0.0.1", port))
+            probe.close()
+            time.sleep(0.3)
+        except OSError:
+            break
+    else:
+        raise AssertionError("孫プロセスがポートを握ったまま残っている")
