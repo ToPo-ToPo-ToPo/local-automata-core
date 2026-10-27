@@ -4,6 +4,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 
 from .base import Tool
 from .workspace import Workspace
@@ -41,6 +42,36 @@ def _looks_like_install(command: str) -> bool:
     return bool(_INSTALL_RE.search(command))
 
 
+def _popen_kwargs() -> dict:
+    """子を「まとめて止められる単位」で起こす。
+
+    posix: 新しいセッション（プロセスグループ）。タイムアウト時に killpg で孫まで届く。
+    Windows: 新しいプロセスグループ（killpg 相当は無いので、停止は taskkill /T で木ごと）。
+    """
+    if os.name == "posix":
+        return {"start_new_session": True}
+    return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """直下の sh/cmd だけでなく、その配下の孫プロセスも含めて始末する。"""
+    if os.name == "posix":
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            proc.kill()
+            return
+    # Windows: taskkill /T が子孫を辿って終わらせる（依存を増やさない）。失敗したら本人だけ kill
+    try:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                       capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if proc.poll() is None:
+        proc.kill()
+
+
 def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
     """ws（workspace）を作業ディレクトリとして実行する run_command を返す。
 
@@ -57,11 +88,10 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
                 "起動し直してください。標準ライブラリで代替できないか検討してください。\n"
                 f"コマンド: {command}"
             )
-        # shell=True の子プロセス（/bin/sh）は複合コマンド（`a && b`、パイプ等）だと
-        # 自身を exec せず孫プロセスを fork する。subprocess.run の timeout は直下の sh しか
+        # shell=True の子プロセス（/bin/sh・cmd.exe）は複合コマンド（`a && b`、パイプ等）だと
+        # 自身を exec せず孫プロセスを fork する。subprocess.run の timeout は直下のシェルしか
         # kill しないため、孫（例: 無限ループの python）が orphan として CPU を食い続ける。
-        # これを防ぐため、新しいセッション（プロセスグループ）で起動し、タイムアウト時は
-        # グループ全体に SIGKILL を送って子孫ごと確実に始末する。
+        # これを防ぐため、まとめて止められる単位で起動し、タイムアウト時は子孫ごと確実に始末する。
         proc = subprocess.Popen(
             command,
             shell=True,
@@ -69,17 +99,15 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=_command_env(),
-            start_new_session=True,  # 子をプロセスグループのリーダーにする（getpgid==pid）
+            **_popen_kwargs(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # 直下の sh だけでなく、その配下の孫プロセスも含めてグループごと kill する。
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
+            _kill_tree(proc)
             # ゾンビを残さないよう刈り取る（パイプの後始末も兼ねる）。
             try:
                 proc.communicate(timeout=5)
@@ -108,3 +136,7 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
             func=run_command,
         ),
     ]
+
+
+__all__ = ["SHELL_TOOL_NAMES", "build_shell_tools"]
+_ = sys

@@ -5,7 +5,9 @@ import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from .base import Tool
 from .workspace import Workspace
@@ -21,16 +23,24 @@ _IGNORE_DIRS = {
 }
 
 
-def _walk_files(base: Path, follow_links: bool = False):
-    """base 配下のファイルを列挙する（無視ディレクトリ・隠しは枝刈り）。"""
+def _walk_files(base: Path, follow_links: bool = False, only: frozenset[str] | None = None):
+    """base 配下のファイルを列挙する（無視ディレクトリ・隠しは枝刈り）。
+
+    only を渡すと base 直下は only の名前だけを歩く（読むだけの場所で見せる名前を絞る）。
+    """
     if base.is_file():
         yield base
         return
     for root, dirs, names in os.walk(base, followlinks=follow_links):
-        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS and not d.startswith(".")]
+        at_top = Path(root) == base
+        dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS and not d.startswith(".")
+                   and (only is None or not at_top or d in only)]
         for n in names:
-            if not n.startswith("."):
-                yield Path(root) / n
+            if n.startswith("."):
+                continue
+            if only is not None and at_top and n not in only:
+                continue
+            yield Path(root) / n
 
 
 def _grep_with_rg(
@@ -66,15 +76,16 @@ def _grep_with_rg(
 def _grep_python(
     base: Path, pattern: str, glob: str | None,
     ignore_case: bool, context: int, max_results: int, root: Path,
-    prefix: str | None = None,
+    prefix: str | None = None, only: frozenset[str] | None = None,
 ) -> list[str]:
     """純Python検索（無視ディレクトリは枝刈り）。一致行のリストを返す（上限で打ち切り）。
 
     prefix を渡すと読むだけの場所の検索: 結果は `<prefix>/<root からの相対>` で示し、リンクもたどる。
+    only は base 直下で歩く名前の絞り込み（読むだけの場所の見せる名前）。
     """
     regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
     hits: list[str] = []
-    for f in _walk_files(base, follow_links=prefix is not None):
+    for f in _walk_files(base, follow_links=prefix is not None, only=only):
         if not f.is_file():
             continue
         rel = f.relative_to(root)
@@ -133,17 +144,48 @@ def _glob_regex(pattern: str) -> re.Pattern:
     return re.compile("".join(out) + r"\Z")
 
 
-def _mounts_of(read_roots) -> dict[str, Path]:
-    """読むだけの場所を「作業フォルダの中の名前 → 実際の場所」にする。名前はフォルダ名。
+@dataclass(frozen=True)
+class Mount:
+    """読むだけの場所。path の中身が作業フォルダの中の `<名前>/` として見える。
 
-    例: read_roots=[".../agents/x/apps"] なら、作業フォルダの中の `apps/` として見える。
+    only が None でなければ、直下は only の名前だけが「存在する」。それ以外の直下の名前は
+    一覧に出ず、読む・探すも隠しファイルと同じ扱いで差し戻す（見せるアプリを絞る用途）。
     """
-    mounts: dict[str, Path] = {}
+
+    path: Path
+    only: frozenset[str] | None = None
+
+    def allows(self, child: str) -> bool:
+        return self.only is None or child in self.only
+
+
+#: read_roots の 1 要素。文字列/Path は「フォルダ名で見せる」。タプルは (名前, 場所[, 見せる直下の名前])。
+MountSpec = "str | Path | tuple[str, str | Path] | tuple[str, str | Path, Sequence[str] | None]"
+
+
+def _mounts_of(read_roots) -> dict[str, Mount]:
+    """読むだけの場所を「作業フォルダの中の名前 → Mount」にする。
+
+    - 文字列・Path: 名前はフォルダ名。例: read_roots=[".../agents/x/apps"] なら `apps/` として見える
+    - タプル (名前, 場所): 名前を明示する
+    - タプル (名前, 場所, only): さらに直下で見せる名前を only に絞る（None なら全部）
+    """
+    mounts: dict[str, Mount] = {}
     for r in read_roots or []:
-        path = Path(os.path.abspath(os.path.expanduser(str(r))))
-        if not path.name or path.name in mounts or path.name.startswith("."):
-            raise ValueError(f"read_roots の名前（フォルダ名）が空・重複・隠しになっている: {r}")
-        mounts[path.name] = path
+        if isinstance(r, (tuple, list)):
+            if len(r) not in (2, 3) or not isinstance(r[0], str):
+                raise ValueError(f"read_roots のタプルは (名前, 場所[, 見せる名前の列]) です: {r!r}")
+            name = r[0]
+            path = Path(os.path.abspath(os.path.expanduser(str(r[1]))))
+            only = r[2] if len(r) == 3 else None
+            only_set = None if only is None else frozenset(str(x) for x in only)
+        else:
+            path = Path(os.path.abspath(os.path.expanduser(str(r))))
+            name = path.name
+            only_set = None
+        if not name or name in mounts or name.startswith(".") or "/" in name or "\\" in name:
+            raise ValueError(f"read_roots の名前（フォルダ名）が空・重複・隠しになっている: {r!r}")
+        mounts[name] = Mount(path, only_set)
     return mounts
 
 
@@ -152,16 +194,16 @@ def _hidden(parts) -> bool:
     return any(p.startswith(".") or p in _IGNORE_DIRS for p in parts)
 
 
-def _make_resolver(ws: Workspace, mounts: dict[str, Path] | None = None):
+def _make_resolver(ws: Workspace, mounts: dict[str, Mount] | None = None):
     """ws.root 配下に閉じ込めたパス解決関数を作る（workspace 外へのアクセスを拒否）。
 
     root は実行時に ws.root を読むので、セッションフォルダの改名にも追従する。
 
-    mounts は読むだけの場所（名前 → 実際の場所）。`apps/x.py` のように名前で始まる相対パスは
+    mounts は読むだけの場所（名前 → Mount）。`apps/x.py` のように名前で始まる相対パスは
     その場所の中を指し、読む道具（read=True）だけが通る。書く・直すは「読むだけ」で断る。
     判定は字面で行う（`..` は先に畳む）。場所の中のリンク（視界のアプリへのリンク）はたどってよい
     — 場所を決めるのは設定を書いた人で、読むだけなので外へ書き出す経路にはならない。
-    隠しファイルと生成物のフォルダは読ませない。
+    隠しファイルと生成物のフォルダ、そして only で見せないと決めた直下の名前は読ませない。
     """
     mounts = mounts or {}
 
@@ -182,7 +224,10 @@ def _make_resolver(ws: Workspace, mounts: dict[str, Path] | None = None):
                 raise ValueError(
                     f"隠しファイルと生成物のフォルダ（.git・.venv・node_modules・build など）は読めません: {path}"
                 )
-            return mounts[parts[0]].joinpath(*parts[1:])
+            mount = mounts[parts[0]]
+            if len(parts) > 1 and not mount.allows(parts[1]):
+                raise ValueError(f"path not found: {path}")
+            return mount.path.joinpath(*parts[1:])
         target = (root / candidate).resolve()
         if target != root and root not in target.parents:
             raise ValueError(
@@ -194,21 +239,23 @@ def _make_resolver(ws: Workspace, mounts: dict[str, Path] | None = None):
 
 
 def build_filesystem_tools(
-    ws: Workspace, read_roots: list[str | Path] | None = None
+    ws: Workspace, read_roots: list | None = None
 ) -> list[Tool]:
     """ws（workspace）に閉じ込めたファイル/検索ツールを返す。
 
-    read_roots を渡すと、その場所が作業フォルダの中の `<フォルダ名>/` として読むだけで見える
-    （例: `apps/cad-tool/src/x.py`）。一覧・検索・グロブも作業フォルダ全体を見るときはそこを含める。
-    道具も指し方も増えない（読む・探すの届く範囲が広がるだけ）。書く・直すは workspace の中だけ。
+    read_roots を渡すと、その場所が作業フォルダの中の `<名前>/` として読むだけで見える
+    （例: `apps/cad-tool/src/x.py`）。要素は文字列/Path（名前はフォルダ名）か、
+    (名前, 場所[, 見せる直下の名前の列]) のタプル（MountSpec）。一覧・検索・グロブも
+    作業フォルダ全体を見るときはそこを含める。道具も指し方も増えない（読む・探すの届く範囲が
+    広がるだけ）。書く・直すは workspace の中だけ。
     """
     mounts = _mounts_of(read_roots)
     resolve = _make_resolver(ws, mounts)
 
-    def mount_of(p: Path) -> tuple[str, Path] | None:
-        for name, mroot in mounts.items():
-            if p == mroot or mroot in p.parents:
-                return name, mroot
+    def mount_of(p: Path) -> tuple[str, Mount] | None:
+        for name, m in mounts.items():
+            if p == m.path or m.path in p.parents:
+                return name, m
         return None
 
     def read_file(path: str, offset: int = 0, limit: int | None = None) -> str:
@@ -256,8 +303,11 @@ def build_filesystem_tools(
         if p.is_file():
             return path
         entries = sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
-        if mount_of(p) is not None:   # 読むだけの場所では隠し・生成物を見せない
+        area = mount_of(p)
+        if area is not None:   # 読むだけの場所では隠し・生成物を見せない
             entries = [e for e in entries if not _hidden([e.name])]
+            if p == area[1].path:   # 場所の直下は、見せると決めた名前だけ
+                entries = [e for e in entries if area[1].allows(e.name)]
         listing = [f"{e.name}/" if e.is_dir() else e.name for e in entries]
         if p == ws.root:   # 作業フォルダの直下には、読むだけの場所（apps/ など）も並べる
             listing = [f"{name}/" for name in mounts if f"{name}/" not in listing] + listing
@@ -290,8 +340,10 @@ def build_filesystem_tools(
 
         area = mount_of(base)
         if area is not None:   # 読むだけの場所の中（apps/… と示す。リンクもたどる）
-            name, mroot = area
-            return text(_grep_python(base, pattern, glob, ignore_case, ctx, limit, mroot, prefix=name))
+            name, m = area
+            only = m.only if base == m.path else None
+            return text(_grep_python(base, pattern, glob, ignore_case, ctx, limit, m.path,
+                                     prefix=name, only=only))
         root = ws.root
         rel_base = "." if base == root else base.relative_to(root).as_posix()
         # ripgrep があれば優先（高速・.gitignore 尊重）。無ければ純Pythonで代替。
@@ -302,11 +354,11 @@ def build_filesystem_tools(
             return out
         # 作業フォルダ全体を探すときは、読むだけの場所（apps/ など）も探す
         hits = [] if out == "(一致なし)" else out.splitlines()
-        for name, mroot in mounts.items():
+        for name, m in mounts.items():
             if len(hits) >= limit:
                 break
-            hits += _grep_python(mroot, pattern, glob, ignore_case, ctx, limit - len(hits),
-                                 mroot, prefix=name)
+            hits += _grep_python(m.path, pattern, glob, ignore_case, ctx, limit - len(hits),
+                                 m.path, prefix=name, only=m.only)
         return text(hits)
 
     def glob(pattern: str, max_results: int = 200) -> str:
@@ -318,16 +370,19 @@ def build_filesystem_tools(
         # 読むだけの場所（apps/ など）も作業フォルダの中として照合する。リンクもたどり、隠し・生成物は除く
         regex = _glob_regex(pattern)
         head = pattern.split("/", 1)[0]
-        for name, mroot in mounts.items():
+        for name, m in mounts.items():
             if len(found) >= max_results:
                 break
             if not any(c in head for c in "*?[") and head != name:
                 continue   # 先頭が別の名前（例 src/*.py）なら、この場所は歩かない
             if regex.match(name):
                 found.append(f"{name}/")
-            for dirpath, dirs, files in os.walk(mroot, followlinks=True):
-                dirs[:] = sorted(d for d in dirs if not _hidden([d]))
-                rel_dir = Path(dirpath).relative_to(mroot).as_posix()
+            for dirpath, dirs, files in os.walk(m.path, followlinks=True):
+                at_top = Path(dirpath) == m.path
+                dirs[:] = sorted(d for d in dirs if not _hidden([d]) and (not at_top or m.allows(d)))
+                if at_top:
+                    files = [f for f in files if m.allows(f)]
+                rel_dir = Path(dirpath).relative_to(m.path).as_posix()
                 prefix = name if rel_dir == "." else f"{name}/{rel_dir}"
                 found += [f"{prefix}/{d}/" for d in dirs if regex.match(f"{prefix}/{d}")]
                 found += [f"{prefix}/{f}" for f in sorted(files)
