@@ -2,10 +2,11 @@
 # 配布名・import 名を揃える: dist = local-automata-core / import = local_automata_core。
 # （汎用名 agent-core は他プロジェクトと衝突するため使用不可。）
 name = "local-automata-core"
-version = "0.13.2"
+version = "0.13.3"
 description = "エージェント構築用の共有ツールキット。汎用ツール・MCP 連携・設定・文脈管理。LLM 接続は local-llm-client に委ね、推論サーバーは別パッケージ local-llm-server。"
 readme = "README.md"
-requires-python = ">=3.11"
+# ssl の侵害鍵拒否を含む各系列の修正版が必要。依存先クライアントと同じ条件。
+requires-python = ">=3.11.18,!=3.12.0.*,!=3.12.1.*,!=3.12.2.*,!=3.12.3.*,!=3.12.4.*,!=3.12.5.*,!=3.12.6.*,!=3.12.7.*,!=3.12.8.*,!=3.12.9.*,!=3.12.10.*,!=3.12.11.*,!=3.12.12.*,!=3.12.13.*,!=3.12.14.*,!=3.12.15.*,!=3.13.0.*,!=3.13.1.*,!=3.13.2.*,!=3.13.3.*,!=3.13.4.*,!=3.13.5.*,!=3.13.6.*,!=3.13.7.*,!=3.13.8.*,!=3.13.9.*,!=3.13.10.*,!=3.13.11.*,!=3.13.12.*,!=3.13.13.*,!=3.13.14.*,!=3.13.15.*,!=3.13.16.*,!=3.13.17.*,!=3.14.0.*,!=3.14.1.*,!=3.14.2.*,!=3.14.3.*,!=3.14.4.*,!=3.14.5.*,!=3.14.6.*,!=3.14.7.*,!=3.14.8.*,!=3.14.9.*,!=3.15.0.*,!=3.15.1.*"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "ToPo-ToPo-ToPo" }]
@@ -15,21 +16,32 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-# local-llm-client（PyPI）は在席セッション API が必要なため >=0.3.0。
-# 他の下限は既知の脆弱性が直った版（2026-10 時点の OSV）。
-# mcp>=2.2.0: CVE-2026-59951 / pypdf>=6.21.2: CVE-2026-115585 ほか / pymupdf>=1.26.7: CVE-2026-3029。
+# local-llm-client>=0.10.3: Python・CA・旧SDKを含むHTTP間接依存の安全な下限を公開要件で強制。
+# 下限は 2026-10-28 の公式告知と PyPI の脆弱性情報から確認。
+# mcp>=2.2.0: CVE-2026-59951 / pypdf>=6.21.3: 10/27 公開の4件 / pymupdf>=2.0: CVE-2026-82035。
 # certifi・httpx2 は直接は使わないが、通信の安全のため下限だけ置く（既存環境でも更新させる）。
 # certifi>=2026.10.19: eMudhra 中間 CA の秘密鍵侵害（GHSA-6q48-6c7w-9gw2）。
 # openai 2 系 → httpx → certifi の経路が残る環境向け。
 # httpx2>=2.12.0: CVE-2026-84380 ほか（mcp・openai 3 系が使う）。
 dependencies = [
-    "local-llm-client>=0.3.0",
+    "local-llm-client>=0.10.3",
     "mcp>=2.2.0",
-    "pypdf>=6.21.2",
-    "pymupdf>=1.26.7",
+    "pypdf>=6.21.3",
+    "pymupdf>=2.0",
     "pyyaml>=6.0",
     "certifi>=2026.10.19",
     "httpx2>=2.12.0",
+    # MCP の間接依存は上流の宣言だけでは未修正版も選べるため、既知の修正下限を補う。
+    "cryptography>=50.0.0",
+    "opentelemetry-api>=1.45.1",
+    "pyjwt>=2.15.0",
+    "python-multipart>=0.0.31",
+    "starlette>=1.3.1",
+    # PyMuPDF 2 の ONNX / SymPy 経路。旧推移依存の修正前版を除外。
+    "onnxruntime>=1.18.0",  # PyMuPDF 2 同梱モデルの ONNX IR 10 をサポート
+    "mpmath>=1.3.0",
+    "protobuf>=6.33.5",
+    "setuptools>=84.1.0",
 ]
 
 [project.urls]
@@ -39,7 +51,7 @@ Repository = "https://github.com/ToPo-ToPo-ToPo/local-automata-core"
 dev = ["pytest>=8.0"]
 
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=84.1.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -47,3 +59,7 @@ include = ["local_automata_core*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv]
+# Python の修正版カタログと、uv 自身の TLS 修正を含む版。
+required-version = ">=0.13.6"
