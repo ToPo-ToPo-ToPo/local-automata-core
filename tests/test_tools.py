@@ -72,7 +72,9 @@ def test_grep_and_glob(tmp_path):
     assert "invalid regex" in t["grep"].func(pattern="([")
 
 
-def test_grep_options_and_ignores(tmp_path):
+def test_grep_options_and_ignores(tmp_path, monkeypatch):
+    # rg がない場合の枝刈りを、実行環境のインストール状態に依存せず確認する。
+    monkeypatch.setattr("local_automata_core.tools.filesystem.shutil.which", lambda _: None)
     t = reg_map(tmp_path, ["write_file", "grep"])
     t["write_file"].func(path="src/auth.py", content="def Login(user):\n    TOKEN = 'x'\n    return TOKEN\n")
     t["write_file"].func(path="src/util.js", content="const TOKEN = 1;\n")
