@@ -2,7 +2,7 @@
 # 配布名・import 名を揃える: dist = local-automata-core / import = local_automata_core。
 # （汎用名 agent-core は他プロジェクトと衝突するため使用不可。）
 name = "local-automata-core"
-version = "0.13.0"
+version = "0.13.1"
 description = "エージェント構築用の共有ツールキット。汎用ツール・MCP 連携・設定・文脈管理。LLM 接続は local-llm-client に委ね、推論サーバーは別パッケージ local-llm-server。"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,12 +16,20 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 # local-llm-client（PyPI）は在席セッション API が必要なため >=0.3.0。
+# 他の下限は既知の脆弱性が直った版（2026-10 時点の OSV）。
+# mcp>=2.2.0: CVE-2026-59951 / pypdf>=6.21.2: CVE-2026-115585 ほか / pymupdf>=1.26.7: CVE-2026-3029。
+# certifi・httpx2 は直接は使わないが、通信の安全のため下限だけ置く（既存環境でも更新させる）。
+# certifi>=2026.10.19: eMudhra 中間 CA の秘密鍵侵害（GHSA-6q48-6c7w-9gw2）。
+# openai 2 系 → httpx → certifi の経路が残る環境向け。
+# httpx2>=2.12.0: CVE-2026-84380 ほか（mcp・openai 3 系が使う）。
 dependencies = [
     "local-llm-client>=0.3.0",
-    "mcp>=2.0",
-    "pypdf>=4.0",
-    "pymupdf>=1.24",
+    "mcp>=2.2.0",
+    "pypdf>=6.21.2",
+    "pymupdf>=1.26.7",
     "pyyaml>=6.0",
+    "certifi>=2026.10.19",
+    "httpx2>=2.12.0",
 ]
 
 [project.urls]
