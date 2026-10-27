@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from .base import Tool
 from .workspace import Workspace
@@ -20,6 +22,85 @@ def _command_env() -> dict[str, str]:
     env = os.environ.copy()
     env["MPLBACKEND"] = "Agg"
     return env
+
+
+def find_git_bash() -> str | None:
+    """Windows で Git for Windows の bash を探す（無ければ None。posix では常に None）。
+
+    頭脳（LLM）が書くシェルコマンドは `mkdir -p`・`cp`・`&&` のような POSIX の書き方が既定で、
+    cmd.exe では `-p` という名前のフォルダができる・`cp` が無いと崩れる。bash があればそれで動かし、
+    macOS（/bin/sh）と同じ書き方を通す。
+
+    PATH の ``bash`` は使わない: Windows では System32 の bash.exe（WSL の起動口）や WindowsApps の
+    別名に当たり、ディストリビューションが無いと動かない。git の場所から Git の導入フォルダを辿り、
+    その ``bin/bash.exe``（coreutils を PATH に足してから bash を起こす入口）を使う。
+    """
+    if os.name != "nt":
+        return None
+    roots: list[Path] = []
+    git = shutil.which("git")
+    if git:
+        # <Git>/cmd/git.exe・<Git>/bin/git.exe・<Git>/mingw64/bin/git.exe のどれでも導入フォルダに届く
+        roots.extend(list(Path(git).resolve().parents)[:3])
+    for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        if os.environ.get(var):
+            roots.append(Path(os.environ[var]) / "Git")
+    if os.environ.get("LOCALAPPDATA"):
+        roots.append(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Git")
+    for root in roots:
+        bash = root / "bin" / "bash.exe"
+        if bash.is_file() and (root / "usr" / "bin").is_dir():
+            return str(bash)
+    return None
+
+
+_SHELL_NOTES = {
+    "ja": {
+        "posix": "シェルは /bin/sh。",
+        "bash": ("シェルは bash（Git for Windows）。mkdir -p・cp・ls・cat・&& などがそのまま使える。"
+                 "パスは / 区切りで書く（例: C:/Users/...。円記号は bash がエスケープとして消す）。"),
+        "cmd": ("シェルは Windows の cmd.exe（bash は無い）。mkdir -p・cp・ls・cat・rm は使えないので、"
+                "mkdir（途中のフォルダも作る）・copy・dir・type・del を使う。"),
+    },
+    "en": {
+        "posix": "The shell is /bin/sh.",
+        "bash": ("The shell is bash (Git for Windows): mkdir -p, cp, ls, cat, && and the like work as usual. "
+                 "Write paths with / (e.g. C:/Users/...); bash drops backslashes as escapes."),
+        "cmd": ("The shell is Windows cmd.exe (no bash): mkdir -p, cp, ls, cat and rm do not exist, so use "
+                "mkdir (creates intermediate folders), copy, dir, type and del."),
+    },
+}
+
+
+def describe_shell(lang: str = "ja", bash: str | None = None) -> str:
+    """run_command がどのシェルで動くかの一文（道具の説明に添えて頭脳に見せる）。
+
+    bash を省くとこの機械で探す（build_shell_tools と同じ判定）。
+    """
+    notes = _SHELL_NOTES.get(lang, _SHELL_NOTES["en"])
+    if os.name != "nt":
+        return notes["posix"]
+    return notes["bash"] if (bash or find_git_bash()) else notes["cmd"]
+
+
+def _decode(data: bytes | None) -> str:
+    """子の出力を文字列に。UTF-8 で読めなければ Windows のコンソールの文字コード（cmd.exe や
+    Windows の道具のメッセージ。日本語版は cp932）で読み直す。以前は UTF-8 決め打ちで、
+    cmd.exe の「'cp' は…認識されていません」が文字化けし、頭脳が失敗の理由を読めなかった。
+    """
+    if not data:
+        return ""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    if os.name == "nt":
+        try:
+            return data.decode("oem", errors="replace")
+        except LookupError:
+            pass
+    return data.decode("utf-8", errors="replace")
+
 
 SHELL_TOOL_NAMES = ("run_command",)
 
@@ -79,6 +160,7 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
     （勝手なインストールを防ぐ。--allow-install / CODER_ALLOW_INSTALL で解除）。
     注意: ヒューリスティックな検出であり、完全な隔離ではない（真の隔離はコンテナ/VM）。
     """
+    bash = find_git_bash()  # Windows で Git の bash があれば POSIX の書き方で動かす（無ければ cmd.exe）
 
     def run_command(command: str, timeout: int = 120) -> str:
         if not allow_install and _looks_like_install(command):
@@ -88,24 +170,22 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
                 "起動し直してください。標準ライブラリで代替できないか検討してください。\n"
                 f"コマンド: {command}"
             )
-        # shell=True の子プロセス（/bin/sh・cmd.exe）は複合コマンド（`a && b`、パイプ等）だと
+        # シェルの子プロセス（/bin/sh・bash・cmd.exe）は複合コマンド（`a && b`、パイプ等）だと
         # 自身を exec せず孫プロセスを fork する。subprocess.run の timeout は直下のシェルしか
         # kill しないため、孫（例: 無限ループの python）が orphan として CPU を食い続ける。
         # これを防ぐため、まとめて止められる単位で起動し、タイムアウト時は子孫ごと確実に始末する。
         proc = subprocess.Popen(
-            command,
-            shell=True,
+            [bash, "-c", command] if bash else command,
+            shell=not bash,
             cwd=str(ws.root),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             env=_command_env(),
             **_popen_kwargs(),
         )
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            out_b, err_b = proc.communicate(timeout=timeout)
+            stdout, stderr = _decode(out_b), _decode(err_b)
         except subprocess.TimeoutExpired:
             _kill_tree(proc)
             # ゾンビを残さないよう刈り取る（パイプの後始末も兼ねる）。
@@ -124,7 +204,8 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
     return [
         Tool(
             name="run_command",
-            description="workspace を作業ディレクトリとしてシェルコマンドを実行し、標準出力・標準エラー・終了コードを返す。",
+            description=("workspace を作業ディレクトリとしてシェルコマンドを実行し、標準出力・標準エラー・終了コードを返す。"
+                         + describe_shell("ja", bash)),
             parameters={
                 "type": "object",
                 "properties": {
@@ -138,5 +219,5 @@ def build_shell_tools(ws: Workspace, allow_install: bool = False) -> list[Tool]:
     ]
 
 
-__all__ = ["SHELL_TOOL_NAMES", "build_shell_tools"]
+__all__ = ["SHELL_TOOL_NAMES", "build_shell_tools", "describe_shell", "find_git_bash"]
 _ = sys
